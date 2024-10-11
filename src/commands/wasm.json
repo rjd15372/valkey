@@ -1,0 +1,33 @@
+{
+    "WASM": {
+        "summary": "Executes a server-side WASM WAT script.",
+        "complexity": "Depends on the script that is executed.",
+        "group": "scripting",
+        "since": "8.1.0",
+        "arity": -1,
+        "function": "evalWasm",
+        "command_flags": [
+            "NOSCRIPT",
+            "SKIP_MONITOR",
+            "MAY_REPLICATE",
+            "NO_MANDATORY_KEYS",
+            "STALE"
+        ],
+        "acl_categories": [
+            "SCRIPTING"
+        ],
+        "arguments": [
+            {
+                "name": "script",
+                "type": "string"
+            },
+            {
+                "name": "arg",
+                "type": "integer"
+            }
+        ],
+        "reply_schema": {
+            "description": "Return value depends on the script that is executed"
+        }
+    }
+}
