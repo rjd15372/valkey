@@ -23,6 +23,14 @@ static void addReplyWasmTrap(client *c, const char *msg, wasm_trap_t *trap) {
     wasm_byte_vec_delete(&trap_message);
 }
 
+static wasm_trap_t *hello_callback(void *env, wasmtime_caller_t *caller,
+                                   const wasmtime_val_t *args, size_t nargs,
+                                   wasmtime_val_t *results, size_t nresults) {
+  printf("Calling back...\n");
+  printf("> Hello World!\n");
+  return NULL;
+}   
+
 void evalWasm(client *c) {
     if (c->argc > 3) {
         addReplyErrorArity(c);
@@ -65,9 +73,16 @@ void evalWasm(client *c) {
         goto exit;
     }
 
+    wasm_functype_t *hello_ty = wasm_functype_new_0_0();
+    wasmtime_func_t hello;
+    wasmtime_func_new(context, hello_ty, hello_callback, NULL, NULL, &hello);
+
     wasm_trap_t *trap = NULL;
     wasmtime_instance_t instance;
-    error = wasmtime_instance_new(context, module, NULL, 0, &instance, &trap);
+    wasmtime_extern_t import;
+    import.kind = WASMTIME_EXTERN_FUNC;
+    import.of.func = hello;
+    error = wasmtime_instance_new(context, module, &import, 1, &instance, &trap);
     if (error != NULL) {
         addReplyWasmError(c, "Failed to instantiate", error);
         goto exit;
@@ -79,7 +94,7 @@ void evalWasm(client *c) {
     wasmtime_extern_t run;
     char export_name[256];
     size_t export_name_length = 0;
-    bool ok = wasmtime_instance_export_nth(context, &instance, 0, (char **)&export_name, &export_name_length, &run);
+    bool ok = wasmtime_instance_export_get(context, &instance, "serverLog", 9, &run);
     serverAssert(ok);
     serverAssert(run.kind == WASMTIME_EXTERN_FUNC);
 
@@ -87,7 +102,8 @@ void evalWasm(client *c) {
     args.kind = WASMTIME_I32;
     args.of.i32 = (int)script_arg;
     wasmtime_val_t results;
-    error = wasmtime_func_call(context, &run.of.func, &args, 1, &results, 1, &trap);
+    //error = wasmtime_func_call(context, &run.of.func, &args, 1, &results, 1, &trap);
+    error = wasmtime_func_call(context, &run.of.func, NULL, 0, NULL, 0, &trap);
     if (error != NULL) {
         addReplyWasmError(c, "Failed to call function", error);
         goto exit;
