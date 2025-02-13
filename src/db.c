@@ -227,7 +227,7 @@ static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_
     robj *val = *valref;
     val = objectSetKeyAndExpire(val, key->ptr, -1);
     initObjectLRUOrLFU(val);
-    kvstoreHashtableAdd(db->keys, dict_index, val);
+    kvstoreHashtableAdd(db->keys, NULL, dict_index, val);
     signalKeyAsReady(db, key, val->type);
     notifyKeyspaceEvent(NOTIFY_NEW, "new", key, db->id);
     *valref = val;
@@ -291,7 +291,7 @@ int dbAddRDBLoad(serverDb *db, sds key, robj **valref) {
     }
     robj *val = *valref;
     val = objectSetKeyAndExpire(val, key, -1);
-    kvstoreHashtableInsertAtPosition(db->keys, dict_index, val, &pos);
+    kvstoreHashtableInsertAtPosition(db->keys, NULL, dict_index, val, &pos);
     initObjectLRUOrLFU(val);
     *valref = val;
     return 1;
@@ -486,10 +486,10 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
          * (The expires table has no destructor callback.) */
         kvstoreHashtableTwoPhasePopDelete(db->keys, dict_index, &pos);
         if (objectGetExpire(val) != -1) {
-            int deleted = kvstoreHashtableDelete(db->expires, dict_index, key->ptr);
+            int deleted = kvstoreHashtableDelete(db->expires, NULL, dict_index, key->ptr);
             serverAssert(deleted);
         } else {
-            debugServerAssert(0 == kvstoreHashtableDelete(db->expires, dict_index, key->ptr));
+            debugServerAssert(0 == kvstoreHashtableDelete(db->expires, NULL, dict_index, key->ptr));
         }
 
         if (async) {
@@ -1758,7 +1758,7 @@ void swapdbCommand(client *c) {
 int removeExpire(serverDb *db, robj *key) {
     int dict_index = getKVStoreIndexForKey(key->ptr);
     void *popped;
-    if (kvstoreHashtablePop(db->expires, dict_index, key->ptr, &popped)) {
+    if (kvstoreHashtablePop(db->expires, NULL, dict_index, key->ptr, &popped)) {
         robj *val = popped;
         robj *newval = objectSetExpire(val, -1);
         serverAssert(newval == val);
@@ -1789,14 +1789,14 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
         /* Val already had an expire field, so it was not reallocated. */
         serverAssert(newval == val);
         /* It already exists in set of keys with expire. */
-        debugServerAssert(!kvstoreHashtableAdd(db->expires, dict_index, newval));
+        debugServerAssert(!kvstoreHashtableAdd(db->expires, NULL, dict_index, newval));
     } else {
         /* No old expire. Update the pointer in the keys hashtable, if needed,
          * and add it to the expires hashtable. */
         if (newval != val) {
             val = *valref = newval;
         }
-        int added = kvstoreHashtableAdd(db->expires, dict_index, newval);
+        int added = kvstoreHashtableAdd(db->expires, NULL, dict_index, newval);
         serverAssert(added);
     }
 

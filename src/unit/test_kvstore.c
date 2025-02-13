@@ -63,9 +63,9 @@ int test_kvstoreAdd16Keys(int argc, char **argv, int flags) {
     kvstore *kvs2 = kvstoreCreate(&KvstoreHashtableTestType, 0, KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND | KVSTORE_FREE_EMPTY_HASHTABLES);
 
     for (i = 0; i < 16; i++) {
-        TEST_ASSERT(kvstoreHashtableAdd(kvs0, didx, stringFromInt(i)));
-        TEST_ASSERT(kvstoreHashtableAdd(kvs1, didx, stringFromInt(i)));
-        TEST_ASSERT(kvstoreHashtableAdd(kvs2, didx, stringFromInt(i)));
+        TEST_ASSERT(kvstoreHashtableAdd(kvs0, NULL, didx, stringFromInt(i)));
+        TEST_ASSERT(kvstoreHashtableAdd(kvs1, NULL, didx, stringFromInt(i)));
+        TEST_ASSERT(kvstoreHashtableAdd(kvs2, NULL, didx, stringFromInt(i)));
     }
     TEST_ASSERT(kvstoreHashtableSize(kvs0, didx) == 16);
     TEST_ASSERT(kvstoreSize(kvs0) == 16);
@@ -104,13 +104,13 @@ int test_kvstoreIteratorRemoveAllKeysNoDeleteEmptyHashtable(int argc, char **arg
         kvstore *kvs1 = kvstoreCreate(testType, 0, KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND);
 
         for (i = 0; i < 16; i++) {
-            TEST_ASSERT(kvstoreHashtableAdd(kvs1, didx, stringFromInt(i)));
+            TEST_ASSERT(kvstoreHashtableAdd(kvs1, NULL, didx, stringFromInt(i)));
         }
 
         kvs_it = kvstoreIteratorInit(kvs1, HASHTABLE_ITER_SAFE);
         while (kvstoreIteratorNext(kvs_it, &key)) {
             curr_slot = kvstoreIteratorGetCurrentHashtableIndex(kvs_it);
-            TEST_ASSERT(kvstoreHashtableDelete(kvs1, curr_slot, key));
+            TEST_ASSERT(kvstoreHashtableDelete(kvs1, NULL, curr_slot, key));
         }
         kvstoreIteratorRelease(kvs_it);
 
@@ -139,13 +139,13 @@ int test_kvstoreIteratorRemoveAllKeysDeleteEmptyHashtable(int argc, char **argv,
     kvstore *kvs2 = kvstoreCreate(&KvstoreHashtableTestType, 0, KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND | KVSTORE_FREE_EMPTY_HASHTABLES);
 
     for (i = 0; i < 16; i++) {
-        TEST_ASSERT(kvstoreHashtableAdd(kvs2, didx, stringFromInt(i)));
+        TEST_ASSERT(kvstoreHashtableAdd(kvs2, NULL, didx, stringFromInt(i)));
     }
 
     kvs_it = kvstoreIteratorInit(kvs2, HASHTABLE_ITER_SAFE);
     while (kvstoreIteratorNext(kvs_it, &key)) {
         curr_slot = kvstoreIteratorGetCurrentHashtableIndex(kvs_it);
-        TEST_ASSERT(kvstoreHashtableDelete(kvs2, curr_slot, key));
+        TEST_ASSERT(kvstoreHashtableDelete(kvs2, NULL, curr_slot, key));
     }
     kvstoreIteratorRelease(kvs_it);
 
@@ -175,12 +175,12 @@ int test_kvstoreHashtableIteratorRemoveAllKeysNoDeleteEmptyHashtable(int argc, c
     kvstore *kvs1 = kvstoreCreate(&KvstoreHashtableTestType, 0, KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND);
 
     for (i = 0; i < 16; i++) {
-        TEST_ASSERT(kvstoreHashtableAdd(kvs1, didx, stringFromInt(i)));
+        TEST_ASSERT(kvstoreHashtableAdd(kvs1, NULL, didx, stringFromInt(i)));
     }
 
     kvs_di = kvstoreGetHashtableIterator(kvs1, didx, HASHTABLE_ITER_SAFE);
     while (kvstoreHashtableIteratorNext(kvs_di, &key)) {
-        TEST_ASSERT(kvstoreHashtableDelete(kvs1, didx, key));
+        TEST_ASSERT(kvstoreHashtableDelete(kvs1, NULL, didx, key));
     }
     kvstoreReleaseHashtableIterator(kvs_di);
 
@@ -206,12 +206,12 @@ int test_kvstoreHashtableIteratorRemoveAllKeysDeleteEmptyHashtable(int argc, cha
     kvstore *kvs2 = kvstoreCreate(&KvstoreHashtableTestType, 0, KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND | KVSTORE_FREE_EMPTY_HASHTABLES);
 
     for (i = 0; i < 16; i++) {
-        TEST_ASSERT(kvstoreHashtableAdd(kvs2, didx, stringFromInt(i)));
+        TEST_ASSERT(kvstoreHashtableAdd(kvs2, NULL, didx, stringFromInt(i)));
     }
 
     kvs_di = kvstoreGetHashtableIterator(kvs2, didx, HASHTABLE_ITER_SAFE);
     while (kvstoreHashtableIteratorNext(kvs_di, &key)) {
-        TEST_ASSERT(kvstoreHashtableDelete(kvs2, didx, key));
+        TEST_ASSERT(kvstoreHashtableDelete(kvs2, NULL, didx, key));
     }
     kvstoreReleaseHashtableIterator(kvs_di);
 

@@ -539,7 +539,7 @@ void loadServerConfigFromString(char *config) {
 
             /* If the target command name is the empty string we just
              * remove it from the command table. */
-            serverAssert(hashtableDelete(server.commands, argv[1]));
+            serverAssert(hashtableDelete(server.commands, NULL, argv[1]));
 
             /* Otherwise we re-add the command under a different name. */
             if (sdslen(argv[2]) != 0) {
@@ -547,7 +547,7 @@ void loadServerConfigFromString(char *config) {
                     sdsfree(cmd->current_name);
                 }
                 cmd->current_name = sdsdup(argv[2]);
-                if (!hashtableAdd(server.commands, cmd)) {
+                if (!hashtableAdd(server.commands, NULL, cmd)) {
                     err = "Target command name already exists";
                     goto loaderr;
                 }

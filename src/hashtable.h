@@ -32,10 +32,13 @@
 #include <stdint.h>
 #include <unistd.h>
 
+typedef struct transaction transaction;
+
 /* --- Opaque types --- */
 
 typedef struct hashtable hashtable;
 typedef struct hashtableStats hashtableStats;
+typedef struct transaction transaction;
 
 /* Can types that can be stack allocated. */
 typedef uint64_t hashtableIterator[5];
@@ -135,14 +138,14 @@ void dismissHashtable(hashtable *ht);
 /* Entries */
 int hashtableFind(hashtable *ht, const void *key, void **found);
 void **hashtableFindRef(hashtable *ht, const void *key);
-int hashtableAdd(hashtable *ht, void *entry);
-int hashtableAddOrFind(hashtable *ht, void *entry, void **existing);
+int hashtableAdd(hashtable *ht, const transaction *tx, void *entry);
+int hashtableAddOrFind(hashtable *ht, const transaction *tx, void *entry, void **existing);
 int hashtableFindPositionForInsert(hashtable *ht, void *key, hashtablePosition *position, void **existing);
-void hashtableInsertAtPosition(hashtable *ht, void *entry, hashtablePosition *position);
-int hashtablePop(hashtable *ht, const void *key, void **popped);
-int hashtableDelete(hashtable *ht, const void *key);
+void hashtableInsertAtPosition(hashtable *ht, const transaction *tx, void *entry, hashtablePosition *position);
+int hashtablePop(hashtable *ht, const transaction *tx, const void *key, void **popped);
+int hashtableDelete(hashtable *ht, const transaction *tx, const void *key);
 void **hashtableTwoPhasePopFindRef(hashtable *ht, const void *key, hashtablePosition *position);
-void hashtableTwoPhasePopDelete(hashtable *ht, hashtablePosition *position);
+void hashtableTwoPhasePopDelete(hashtable *ht, const transaction *tx, hashtablePosition *position);
 int hashtableReplaceReallocatedEntry(hashtable *ht, const void *old_entry, void *new_entry);
 void hashtableIncrementalFindInit(hashtableIncrementalFindState *state, hashtable *ht, const void *key);
 int hashtableIncrementalFindStep(hashtableIncrementalFindState *state);

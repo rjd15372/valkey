@@ -314,7 +314,7 @@ int pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
             *(robj **)dictMetadata(clients) = channel;
             incrRefCount(channel);
             /* Insert this dict in the kvstore at the position returned above. */
-            kvstoreHashtableInsertAtPosition(*type.serverPubSubChannels, slot, clients, &pos);
+            kvstoreHashtableInsertAtPosition(*type.serverPubSubChannels, NULL, slot, clients, &pos);
         }
 
         serverAssert(dictAdd(clients, c, NULL) != DICT_ERR);
@@ -351,7 +351,7 @@ int pubsubUnsubscribeChannel(client *c, robj *channel, int notify, pubsubtype ty
             /* Free the dict and associated hash entry at all if this was
              * the latest client, so that it will be possible to abuse
              * PUBSUB creating millions of channels. */
-            kvstoreHashtableDelete(*type.serverPubSubChannels, slot, channel);
+            kvstoreHashtableDelete(*type.serverPubSubChannels, NULL, slot, channel);
         }
     }
     /* Notify the client */
@@ -386,7 +386,7 @@ void pubsubShardUnsubscribeAllChannelsInSlot(unsigned int slot) {
             }
         }
         dictReleaseIterator(iter);
-        kvstoreHashtableDelete(server.pubsubshard_channels, slot, channel);
+        kvstoreHashtableDelete(server.pubsubshard_channels, NULL, slot, channel);
     }
     kvstoreReleaseHashtableIterator(kvs_di);
 }

@@ -143,7 +143,7 @@ int setTypeAddAux(robj *set, char *str, size_t len, int64_t llval, int str_is_sd
         if (hashtableFindPositionForInsert(ht, sdsval, &position, NULL)) {
             /* Key doesn't already exist in the set. Add it but dup the key. */
             if (sdsval == str) sdsval = sdsdup(sdsval);
-            hashtableInsertAtPosition(ht, sdsval, &position);
+            hashtableInsertAtPosition(ht, NULL, sdsval, &position);
             return 1;
         } else if (sdsval != str) {
             /* String is already a member. Free our temporary sds copy. */
@@ -169,7 +169,7 @@ int setTypeAddAux(robj *set, char *str, size_t len, int64_t llval, int str_is_sd
             } else {
                 /* Size limit is reached. Convert to hashtable and add. */
                 setTypeConvertAndExpand(set, OBJ_ENCODING_HASHTABLE, lpLength(lp) + 1, 1);
-                serverAssert(hashtableAdd(set->ptr, sdsnewlen(str, len)));
+                serverAssert(hashtableAdd(set->ptr, NULL, sdsnewlen(str, len)));
             }
             return 1;
         }
@@ -209,7 +209,7 @@ int setTypeAddAux(robj *set, char *str, size_t len, int64_t llval, int str_is_sd
                 setTypeConvertAndExpand(set, OBJ_ENCODING_HASHTABLE, intsetLen(set->ptr) + 1, 1);
                 /* The set *was* an intset and this value is not integer
                  * encodable, so hashtableAdd should always work. */
-                serverAssert(hashtableAdd(set->ptr, sdsnewlen(str, len)));
+                serverAssert(hashtableAdd(set->ptr, NULL, sdsnewlen(str, len)));
                 return 1;
             }
         }
@@ -246,7 +246,7 @@ int setTypeRemoveAux(robj *setobj, char *str, size_t len, int64_t llval, int str
 
     if (setobj->encoding == OBJ_ENCODING_HASHTABLE) {
         sds sdsval = str_is_sds ? (sds)str : sdsnewlen(str, len);
-        int deleted = hashtableDelete(setobj->ptr, sdsval);
+        int deleted = hashtableDelete(setobj->ptr, NULL, sdsval);
         if (sdsval != str) sdsfree(sdsval); /* free temp copy */
         return deleted;
     } else if (setobj->encoding == OBJ_ENCODING_LISTPACK) {
@@ -507,7 +507,7 @@ int setTypeConvertAndExpand(robj *setobj, int enc, unsigned long cap, int panic)
         /* To add the elements we extract integers and create Objects */
         si = setTypeInitIterator(setobj);
         while ((element = setTypeNextObject(si)) != NULL) {
-            serverAssert(hashtableAdd(ht, element));
+            serverAssert(hashtableAdd(ht, NULL, element));
         }
         setTypeReleaseIterator(si);
 
@@ -1132,9 +1132,9 @@ void srandmemberWithCountCommand(client *c) {
         hashtableExpand(ht, size);
         while (setTypeNext(si, &str, &len, &llele) != -1) {
             if (str == NULL) {
-                serverAssert(hashtableAdd(ht, (void *)sdsfromlonglong(llele)));
+                serverAssert(hashtableAdd(ht, NULL, (void *)sdsfromlonglong(llele)));
             } else {
-                serverAssert(hashtableAdd(ht, (void *)sdsnewlen(str, len)));
+                serverAssert(hashtableAdd(ht, NULL, (void *)sdsnewlen(str, len)));
             }
         }
         setTypeReleaseIterator(si);
@@ -1144,7 +1144,7 @@ void srandmemberWithCountCommand(client *c) {
         while (size > count) {
             void *element;
             hashtableFairRandomEntry(ht, &element);
-            hashtableDelete(ht, element);
+            hashtableDelete(ht, NULL, element);
             sdsfree((sds)element);
             size--;
         }
@@ -1169,7 +1169,7 @@ void srandmemberWithCountCommand(client *c) {
             /* Try to add the object to the dictionary. If it already exists
              * free it, otherwise increment the number of objects we have
              * in the result dictionary. */
-            if (hashtableAdd(ht, sdsele))
+            if (hashtableAdd(ht, NULL, sdsele))
                 added++;
             else
                 sdsfree(sdsele);

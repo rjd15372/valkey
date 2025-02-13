@@ -1986,7 +1986,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             /* This will also be called when the set was just converted
              * to a regular hash table encoded set. */
             if (o->encoding == OBJ_ENCODING_HASHTABLE) {
-                if (!hashtableAdd((hashtable *)o->ptr, sdsele)) {
+                if (!hashtableAdd((hashtable *)o->ptr, NULL, sdsele)) {
                     rdbReportCorruptRDB("Duplicate set members detected");
                     decrRefCount(o);
                     sdsfree(sdsele);
@@ -2051,7 +2051,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             totelelen += sdslen(sdsele);
 
             znode = zslInsert(zs->zsl, score, sdsele);
-            if (!hashtableAdd(zs->ht, znode)) {
+            if (!hashtableAdd(zs->ht, NULL, znode)) {
                 rdbReportCorruptRDB("Duplicate zset fields detected");
                 decrRefCount(o);
                 /* no need to free 'sdsele', will be released by zslFree together with 'o' */
@@ -2122,7 +2122,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
                 hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
                 hashTypeEntry *entry = hashTypeCreateEntry(field, value);
                 sdsfree(field);
-                if (!hashtableAdd((hashtable *)o->ptr, entry)) {
+                if (!hashtableAdd((hashtable *)o->ptr, NULL, entry)) {
                     rdbReportCorruptRDB("Duplicate hash fields detected");
                     if (dupSearchDict) dictRelease(dupSearchDict);
                     freeHashTypeEntry(entry);
@@ -2172,7 +2172,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             /* Add pair to hash table */
             hashTypeEntry *entry = hashTypeCreateEntry(field, value);
             sdsfree(field);
-            if (!hashtableAdd((hashtable *)o->ptr, entry)) {
+            if (!hashtableAdd((hashtable *)o->ptr, NULL, entry)) {
                 rdbReportCorruptRDB("Duplicate hash fields detected");
                 freeHashTypeEntry(entry);
                 decrRefCount(o);

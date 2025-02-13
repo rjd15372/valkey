@@ -316,7 +316,7 @@ start_server {tags {"info" "external:skip" "debug_defrag:skip"}} {
             assert_morethan $cycle1 0
             assert_morethan $el_sum1 0
             assert_morethan $cmd_sum1 0
-            after 110 ;# default hz is 10, wait for a cron tick. 
+            after 110 ;# default hz is 10, wait for a cron tick.
             set info2 [r info stats]
             set cycle2 [getInfoProperty $info2 eventloop_cycles]
             set el_sum2 [getInfoProperty $info2 eventloop_duration_sum]
@@ -350,7 +350,7 @@ start_server {tags {"info" "external:skip" "debug_defrag:skip"}} {
             assert_morethan $value 0
             assert_lessthan $value 22000 ;# Sanity check to make sure the duration is within a couple of ms
         } {} {io-threads:skip} ; # skip with io-threads as the eventloop metrics are different in that case.
-        
+
 
         test {stats: debug metrics} {
             # make sure debug info is hidden
@@ -557,7 +557,7 @@ start_server {tags {"info" "external:skip"}} {
         set info_mem [lindex $res end-1]
         set mem_stats [lindex $res end]
         assert_range [getInfoProperty $info_mem mem_overhead_db_hashtable_rehashing] 1 64
-        assert_range [dict get $mem_stats overhead.db.hashtable.lut] 1 300
+        assert_range [dict get $mem_stats overhead.db.hashtable.lut] 1 304
         assert_range [dict get $mem_stats overhead.db.hashtable.rehashing] 1 64
         assert_equal [dict get $mem_stats db.dict.rehashing.count] {1}
     }

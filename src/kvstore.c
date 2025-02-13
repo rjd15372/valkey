@@ -790,16 +790,16 @@ void **kvstoreHashtableFindRef(kvstore *kvs, int didx, const void *key) {
     return hashtableFindRef(ht, key);
 }
 
-int kvstoreHashtableAddOrFind(kvstore *kvs, int didx, void *key, void **existing) {
+int kvstoreHashtableAddOrFind(kvstore *kvs, const transaction *tx, int didx, void *key, void **existing) {
     hashtable *ht = createHashtableIfNeeded(kvs, didx);
-    int ret = hashtableAddOrFind(ht, key, existing);
+    int ret = hashtableAddOrFind(ht, tx, key, existing);
     if (ret) cumulativeKeyCountAdd(kvs, didx, 1);
     return ret;
 }
 
-int kvstoreHashtableAdd(kvstore *kvs, int didx, void *entry) {
+int kvstoreHashtableAdd(kvstore *kvs, const transaction *tx, int didx, void *entry) {
     hashtable *ht = createHashtableIfNeeded(kvs, didx);
-    int ret = hashtableAdd(ht, entry);
+    int ret = hashtableAdd(ht, tx, entry);
     if (ret) cumulativeKeyCountAdd(kvs, didx, 1);
     return ret;
 }
@@ -811,9 +811,9 @@ int kvstoreHashtableFindPositionForInsert(kvstore *kvs, int didx, void *key, has
 
 /* Must be used together with kvstoreHashtableFindPositionForInsert, with returned
  * position and with the same didx. */
-void kvstoreHashtableInsertAtPosition(kvstore *kvs, int didx, void *entry, void *position) {
+void kvstoreHashtableInsertAtPosition(kvstore *kvs, const transaction *tx, int didx, void *entry, void *position) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
-    hashtableInsertAtPosition(ht, entry, position);
+    hashtableInsertAtPosition(ht, tx, entry, position);
     cumulativeKeyCountAdd(kvs, didx, 1);
 }
 
@@ -825,15 +825,15 @@ void **kvstoreHashtableTwoPhasePopFindRef(kvstore *kvs, int didx, const void *ke
 
 void kvstoreHashtableTwoPhasePopDelete(kvstore *kvs, int didx, void *position) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
-    hashtableTwoPhasePopDelete(ht, position);
+    hashtableTwoPhasePopDelete(ht, NULL, position);
     cumulativeKeyCountAdd(kvs, didx, -1);
     freeHashtableIfNeeded(kvs, didx);
 }
 
-int kvstoreHashtablePop(kvstore *kvs, int didx, const void *key, void **popped) {
+int kvstoreHashtablePop(kvstore *kvs, const transaction *tx, int didx, const void *key, void **popped) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
     if (!ht) return 0;
-    int ret = hashtablePop(ht, key, popped);
+    int ret = hashtablePop(ht, tx, key, popped);
     if (ret) {
         cumulativeKeyCountAdd(kvs, didx, -1);
         freeHashtableIfNeeded(kvs, didx);
@@ -841,10 +841,10 @@ int kvstoreHashtablePop(kvstore *kvs, int didx, const void *key, void **popped) 
     return ret;
 }
 
-int kvstoreHashtableDelete(kvstore *kvs, int didx, const void *key) {
+int kvstoreHashtableDelete(kvstore *kvs, const transaction *tx, int didx, const void *key) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
     if (!ht) return 0;
-    int ret = hashtableDelete(ht, key);
+    int ret = hashtableDelete(ht, tx, key);
     if (ret) {
         cumulativeKeyCountAdd(kvs, didx, -1);
         freeHashtableIfNeeded(kvs, didx);

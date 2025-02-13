@@ -318,7 +318,7 @@ int hashTypeSet(robj *o, sds field, sds value, int flags) {
         if (hashtableFindPositionForInsert(ht, field, &position, &existing)) {
             /* does not exist yet */
             hashTypeEntry *entry = hashTypeCreateEntry(field, v);
-            hashtableInsertAtPosition(ht, entry, &position);
+            hashtableInsertAtPosition(ht, NULL, entry, &position);
         } else {
             /* exists: replace value */
             hashTypeEntryReplaceValue(existing, v);
@@ -356,7 +356,7 @@ int hashTypeDelete(robj *o, sds field) {
         }
     } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
         hashtable *ht = o->ptr;
-        deleted = hashtableDelete(ht, field);
+        deleted = hashtableDelete(ht, NULL, field);
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -527,7 +527,7 @@ void hashTypeConvertListpack(robj *o, int enc) {
             sds value = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
             hashTypeEntry *entry = hashTypeCreateEntry(field, value);
             sdsfree(field);
-            if (!hashtableAdd(ht, entry)) {
+            if (!hashtableAdd(ht, NULL, entry)) {
                 freeHashTypeEntry(entry);
                 hashTypeResetIterator(&hi); /* Needed for gcc ASAN */
                 serverLogHexDump(LL_WARNING, "listpack with dup elements dump", o->ptr, lpBytes(o->ptr));
@@ -583,7 +583,7 @@ robj *hashTypeDup(robj *o) {
 
             /* Add a field-value pair to a new hash object. */
             hashTypeEntry *entry = hashTypeCreateEntry(field, sdsdup(value));
-            hashtableAdd(ht, entry);
+            hashtableAdd(ht, NULL, entry);
         }
         hashTypeResetIterator(&hi);
 

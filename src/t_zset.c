@@ -456,7 +456,7 @@ static unsigned long zslDeleteRangeByScore(zskiplist *zsl, zrangespec *range, ha
     while (x && zslValueLteMax(x->score, range)) {
         zskiplistNode *next = x->level[0].forward;
         zslDeleteNode(zsl, x, update);
-        hashtableDelete(ht, x->ele);
+        hashtableDelete(ht, NULL, x->ele);
         zslFreeNode(x); /* Here is where x->ele is actually released. */
         removed++;
         x = next;
@@ -483,7 +483,7 @@ static unsigned long zslDeleteRangeByLex(zskiplist *zsl, zlexrangespec *range, h
     while (x && zslLexValueLteMax(x->ele, range)) {
         zskiplistNode *next = x->level[0].forward;
         zslDeleteNode(zsl, x, update);
-        hashtableDelete(ht, x->ele);
+        hashtableDelete(ht, NULL, x->ele);
         zslFreeNode(x); /* Here is where x->ele is actually released. */
         removed++;
         x = next;
@@ -512,7 +512,7 @@ static unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, un
     while (x && traversed <= end) {
         zskiplistNode *next = x->level[0].forward;
         zslDeleteNode(zsl, x, update);
-        hashtableDelete(ht, x->ele);
+        hashtableDelete(ht, NULL, x->ele);
         zslFreeNode(x);
         removed++;
         traversed++;
@@ -1307,7 +1307,7 @@ void zsetConvertAndExpand(robj *zobj, int encoding, unsigned long cap) {
                 ele = sdsnewlen((char *)vstr, vlen);
 
             node = zslInsert(zs->zsl, score, ele);
-            serverAssert(hashtableAdd(zs->ht, node));
+            serverAssert(hashtableAdd(zs->ht, NULL, node));
             zzlNext(zl, &eptr, &sptr);
         }
 
@@ -1535,7 +1535,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
         } else if (!xx) {
             ele = sdsdup(ele);
             zskiplistNode *new_node = zslInsert(zs->zsl, score, ele);
-            serverAssert(hashtableAdd(zs->ht, new_node));
+            serverAssert(hashtableAdd(zs->ht, NULL, new_node));
             *out_flags |= ZADD_OUT_ADDED;
             if (newscore) *newscore = score;
             return 1;
@@ -1554,7 +1554,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
  * element was not there). */
 static int zsetRemoveFromSkiplist(zset *zs, sds ele) {
     void *entry;
-    if (!hashtablePop(zs->ht, ele, &entry)) return 0;
+    if (!hashtablePop(zs->ht, NULL, ele, &entry)) return 0;
     zskiplistNode *node = entry;
 
     /* hashtable only contains pointers to skiplist nodes. Nothing to free. */
@@ -1689,7 +1689,7 @@ robj *zsetDup(robj *o) {
             ele = ln->ele;
             sds new_ele = sdsdup(ele);
             zskiplistNode *znode = zslInsert(new_zs->zsl, ln->score, new_ele);
-            hashtableAdd(new_zs->ht, znode);
+            hashtableAdd(new_zs->ht, NULL, znode);
             ln = ln->backward;
         }
     } else {
@@ -2407,7 +2407,7 @@ static void zdiffAlgorithm1(zsetopsrc *src, long setnum, zset *dstzset, size_t *
         if (!exists) {
             tmp = zuiNewSdsFromValue(&zval);
             znode = zslInsert(dstzset->zsl, zval.score, tmp);
-            hashtableAdd(dstzset->ht, znode);
+            hashtableAdd(dstzset->ht, NULL, znode);
             if (sdslen(tmp) > *maxelelen) *maxelelen = sdslen(tmp);
             (*totelelen) += sdslen(tmp);
         }
@@ -2448,7 +2448,7 @@ static void zdiffAlgorithm2(zsetopsrc *src, long setnum, zset *dstzset, size_t *
             if (j == 0) {
                 tmp = zuiNewSdsFromValue(&zval);
                 znode = zslInsert(dstzset->zsl, zval.score, tmp);
-                hashtableAdd(dstzset->ht, znode);
+                hashtableAdd(dstzset->ht, NULL, znode);
                 cardinality++;
             } else {
                 tmp = zuiSdsFromValue(&zval);
@@ -2697,7 +2697,7 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
                 } else if (j == setnum) {
                     tmp = zuiNewSdsFromValue(&zval);
                     zskiplistNode *znode = zslInsert(dstzset->zsl, score, tmp);
-                    hashtableAdd(dstzset->ht, znode);
+                    hashtableAdd(dstzset->ht, NULL, znode);
                     totelelen += sdslen(tmp);
                     if (sdslen(tmp) > maxelelen) maxelelen = sdslen(tmp);
                 }
@@ -2729,7 +2729,7 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
                 void *existing;
                 if (hashtableFindPositionForInsert(dstzset->ht, sdsval, &position, &existing)) {
                     zskiplistNode *new_node = zslCreateNode(zslRandomLevel(), score, zuiNewSdsFromValue(&zval));
-                    hashtableInsertAtPosition(dstzset->ht, new_node, &position);
+                    hashtableInsertAtPosition(dstzset->ht, NULL, new_node, &position);
                     /* Remember the longest single element encountered,
                      * to understand if it's possible to convert to listpack
                      * at the end. */

@@ -1369,8 +1369,8 @@ int VM_CreateCommand(ValkeyModuleCtx *ctx,
     cp->serverCmd->arity = cmdfunc ? -1 : -2; /* Default value, can be changed later via dedicated API */
     /* Drain IO queue before modifying commands dictionary to prevent concurrent access while modifying it. */
     drainIOThreadsQueue();
-    serverAssert(hashtableAdd(server.commands, cp->serverCmd));
-    serverAssert(hashtableAdd(server.orig_commands, cp->serverCmd));
+    serverAssert(hashtableAdd(server.commands, NULL, cp->serverCmd));
+    serverAssert(hashtableAdd(server.orig_commands, NULL, cp->serverCmd));
     cp->serverCmd->id = ACLGetCommandID(declared_name); /* ID used for ACL. */
     return VALKEYMODULE_OK;
 }
@@ -12202,7 +12202,7 @@ int moduleFreeCommand(struct ValkeyModule *module, struct serverCommand *cmd) {
             struct serverCommand *sub = next;
             if (moduleFreeCommand(module, sub) != C_OK) continue;
 
-            serverAssert(hashtableDelete(cmd->subcommands_ht, sub->declared_name));
+            serverAssert(hashtableDelete(cmd->subcommands_ht, NULL, sub->declared_name));
             sdsfree((sds)sub->declared_name);
             sdsfree(sub->fullname);
             zfree(sub);
@@ -12225,8 +12225,8 @@ void moduleUnregisterCommands(struct ValkeyModule *module) {
         struct serverCommand *cmd = next;
         if (moduleFreeCommand(module, cmd) != C_OK) continue;
 
-        serverAssert(hashtableDelete(server.commands, cmd->fullname));
-        serverAssert(hashtableDelete(server.orig_commands, cmd->fullname));
+        serverAssert(hashtableDelete(server.commands, NULL, cmd->fullname));
+        serverAssert(hashtableDelete(server.orig_commands, NULL, cmd->fullname));
         sdsfree((sds)cmd->declared_name);
         sdsfree(cmd->fullname);
         zfree(cmd);

@@ -3176,7 +3176,7 @@ void commandAddSubcommand(struct serverCommand *parent, struct serverCommand *su
     subcommand->parent = parent;                            /* Assign the parent command */
     subcommand->id = ACLGetCommandID(subcommand->fullname); /* Assign the ID used for ACL. */
 
-    serverAssert(hashtableAdd(parent->subcommands_ht, subcommand));
+    serverAssert(hashtableAdd(parent->subcommands_ht, NULL, subcommand));
 }
 
 /* Set implicit ACl categories (see comment above the definition of
@@ -3253,10 +3253,10 @@ void populateCommandTable(void) {
         c->current_name = c->fullname;
         if (populateCommandStructure(c) == C_ERR) continue;
 
-        retval1 = hashtableAdd(server.commands, c);
+        retval1 = hashtableAdd(server.commands, NULL, c);
         /* Populate an additional dictionary that will be unaffected
          * by rename-command statements in valkey.conf. */
-        retval2 = hashtableAdd(server.orig_commands, c);
+        retval2 = hashtableAdd(server.orig_commands, NULL, c);
         serverAssert(retval1 && retval2);
     }
 }

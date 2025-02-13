@@ -50,6 +50,7 @@
 #include "mt19937-64.h"
 #include "monotonic.h"
 #include "config.h"
+#include "transaction.h"
 
 #include <limits.h>
 #include <stdint.h>
@@ -288,11 +289,159 @@ struct hashtable {
     bucket *tables[2];         /* 0 = main table, 1 = rehashing target.  */
     size_t used[2];            /* Number of entries in each table. */
     int8_t bucket_exp[2];      /* Exponent for num buckets (num = 1 << exp). */
+    size_t txEntries[2];       /* Number of txEntries in the table. */
     int16_t pause_rehash;      /* Non-zero = rehashing is paused */
     int16_t pause_auto_shrink; /* Non-zero = automatic resizing disallowed. */
     size_t child_buckets[2];   /* Number of allocated child buckets. */
     void *metadata[];
 };
+
+typedef enum txEntryType {
+    INSERT,
+    DELETE,
+    POPDELETE,
+} txEntryType;
+
+typedef struct txEntry {
+    txEntryType type;
+    void *new;
+    void *old;
+    const transaction *tx;
+} txEntry;
+
+typedef struct txRollbackCtx {
+    const transaction *tx;
+    hashtable *ht;
+    size_t orig_used[2];
+} txRollbackCtx;
+
+txRollbackCtx rollbackCtx = {0};
+
+static void rollbackUsedCounters(void *args) {
+    txRollbackCtx *ctx = args;
+    ctx->ht->used[0] = ctx->orig_used[0];
+    ctx->ht->used[1] = ctx->orig_used[1];
+    ctx->ht = NULL;
+    ctx->tx = NULL;
+}
+
+static inline void registerTxRollbackHandler(hashtable *ht, const transaction *tx) {
+    if (tx != NULL && rollbackCtx.tx != tx) {
+        rollbackCtx.tx = tx;
+        rollbackCtx.ht = ht;
+        rollbackCtx.orig_used[0] = ht->used[0];
+        rollbackCtx.orig_used[1] = ht->used[1];
+        transactionRegisterPostRollbackHandler(tx, rollbackUsedCounters, &rollbackCtx);
+    }
+}
+
+#define SET_TX_ENTRY_PTR(B, P) ((B)->hashes[P] |= 0x80)
+#define UNSET_TX_ENTRY_PTR(B, P) ((B)->hashes[P] &= 0x7F)
+#define IS_TX_ENTRY(B, P) (int)((B)->hashes[P] & 0x80)
+
+static inline void newTxEntry(hashtable *ht,
+                              int table_index,
+                              bucket *b,
+                              int pos,
+                              txEntryType type,
+                              void *new,
+                              void *old,
+                              const transaction *tx) {
+    registerTxRollbackHandler(ht, tx);
+    ht->txEntries[table_index]++;
+
+    txEntry *entry = zmalloc(sizeof(txEntry));
+    *entry = (txEntry){
+        .type = type,
+        .new = new,
+        .old = old,
+        .tx = tx,
+    };
+    transactionAcquireRef(tx);
+    b->entries[pos] = entry;
+    SET_TX_ENTRY_PTR(b, pos);
+}
+
+static inline void **getEntryRef(bucket *b, int pos) {
+    if (IS_TX_ENTRY(b, pos)) {
+        txEntry *txE = b->entries[pos];
+        if (transactionIsCommitted(txE->tx) || transactionIsUncommitted(txE->tx)) {
+            return &txE->new;
+        } else {
+            assert(transactionIsRolledback(txE->tx));
+            return &txE->old;
+        }
+    }
+    return &b->entries[pos];
+}
+
+static inline int isTxVisible(bucket *b, int pos) {
+    if (IS_TX_ENTRY(b, pos)) {
+        txEntry *txE = b->entries[pos];
+        if (transactionIsCommitted(txE->tx) || transactionIsUncommitted(txE->tx)) {
+            return txE->type != DELETE && txE->type != POPDELETE;
+        } else {
+            assert(transactionIsRolledback(txE->tx));
+            return txE->type != INSERT;
+        }
+    }
+    return 1;
+}
+
+static inline void *getEntry(bucket *b, int pos) {
+    if (IS_TX_ENTRY(b, pos)) {
+        txEntry *txE = b->entries[pos];
+        if (transactionIsCommitted(txE->tx) || transactionIsUncommitted(txE->tx)) {
+            return txE->new;
+        } else {
+            assert(transactionIsRolledback(txE->tx));
+            return txE->old;
+        }
+    }
+    return b->entries[pos];
+}
+
+static inline int isTxEntryEligibleForGC(bucket *b, int pos) {
+    return IS_TX_ENTRY(b, pos) && !transactionIsUncommitted(((txEntry *)b->entries[pos])->tx);
+}
+
+static inline void txEntryGC(hashtable *ht, int table_index, bucket *b, int pos) {
+    assert(IS_TX_ENTRY(b, pos));
+    txEntry *txE = b->entries[pos];
+
+    assert(!transactionIsUncommitted(txE->tx));
+
+    if (transactionIsCommitted(txE->tx)) {
+        if (txE->type == INSERT) {
+            b->entries[pos] = txE->new;
+        } else if (txE->type == DELETE) {
+            if (ht->type->entryDestructor != NULL) {
+                ht->type->entryDestructor(txE->old);
+            }
+            b->presence &= ~(1 << pos);
+        } else {
+            assert(txE->type == POPDELETE);
+            b->presence &= ~(1 << pos);
+        }
+
+    } else {
+        assert(transactionIsRolledback(txE->tx));
+        if (txE->type == INSERT) {
+            if (ht->type->entryDestructor != NULL) {
+                ht->type->entryDestructor(txE->new);
+            }
+            b->presence &= ~(1 << pos);
+        } else {
+            assert(txE->type == DELETE || txE->type == POPDELETE);
+            b->entries[pos] = txE->old;
+        }
+    }
+
+    UNSET_TX_ENTRY_PTR(b, pos);
+    transactionReleaseRef(txE->tx);
+    zfree(txE);
+    ht->txEntries[table_index]--;
+}
 
 typedef struct {
     hashtable *hashtable;
@@ -403,7 +552,7 @@ static inline uint64_t hashEntry(hashtable *ht, const void *entry) {
 /* For the hash bits stored in the bucket, we use the highest bits of the hash
  * value, since these are not used for selecting the bucket. */
 static inline uint8_t highBits(uint64_t hash) {
-    return hash >> (CHAR_BIT * 7);
+    return hash >> (CHAR_BIT * 7 + 1);
 }
 
 static inline int numBucketPositions(bucket *b) {
@@ -423,6 +572,7 @@ static void resetTable(hashtable *ht, int table_idx) {
     ht->used[table_idx] = 0;
     ht->bucket_exp[table_idx] = -1;
     ht->child_buckets[table_idx] = 0;
+    ht->txEntries[table_idx] = 0;
 }
 
 /* Number of top-level buckets. */
@@ -459,6 +609,7 @@ static void rehashingCompleted(hashtable *ht) {
     ht->tables[0] = ht->tables[1];
     ht->used[0] = ht->used[1];
     ht->child_buckets[0] = ht->child_buckets[1];
+    ht->txEntries[0] = ht->txEntries[1];
     resetTable(ht, 1);
     ht->rehash_idx = -1;
 }
@@ -518,6 +669,12 @@ static void rehashBucket(hashtable *ht, bucket *b) {
     int pos;
     for (pos = 0; pos < numBucketPositions(b); pos++) {
         if (!isPositionFilled(b, pos)) continue; /* empty */
+
+        if (isTxEntryEligibleForGC(b, pos)) {
+            txEntryGC(ht, 0, b, pos);
+            if (!isPositionFilled(b, pos)) continue;
+        }
+
         void *entry = b->entries[pos];
         uint8_t h2 = b->hashes[pos];
         /* Insert into table 1. */
@@ -527,7 +684,7 @@ static void rehashBucket(hashtable *ht, bucket *b) {
         if (ht->bucket_exp[1] < ht->bucket_exp[0]) {
             hash = ht->rehash_idx;
         } else {
-            hash = hashEntry(ht, entry);
+            hash = hashEntry(ht, getEntry(b, pos));
         }
         int pos_in_dst_bucket;
         bucket *dst = findBucketForInsert(ht, hash, &pos_in_dst_bucket, NULL);
@@ -536,6 +693,12 @@ static void rehashBucket(hashtable *ht, bucket *b) {
         dst->presence |= (1 << pos_in_dst_bucket);
         ht->used[0]--;
         ht->used[1]++;
+        if (IS_TX_ENTRY(b, pos)) {
+            ht->txEntries[0]--;
+        }
+        if (IS_TX_ENTRY(dst, pos_in_dst_bucket)) {
+            ht->txEntries[1]++;
+        }
     }
     /* Mark the source bucket as empty. */
     b->presence = 0;
@@ -645,11 +808,13 @@ static int resize(hashtable *ht, size_t min_capacity, int *malloc_failed) {
     ht->bucket_exp[1] = exp;
     ht->tables[1] = new_table;
     ht->used[1] = 0;
+    ht->txEntries[1] = 0;
     ht->rehash_idx = 0;
     if (ht->type->rehashingStarted) ht->type->rehashingStarted(ht);
 
     /* If the old table was empty, the rehashing is completed immediately. */
     if (ht->tables[0] == NULL || ht->used[0] == 0) {
+        assert(ht->txEntries[0] == 0);
         rehashingCompleted(ht);
     } else if (ht->type->instant_rehashing) {
         while (hashtableIsRehashing(ht)) {
@@ -667,6 +832,10 @@ static int expand(hashtable *ht, size_t size, int *malloc_failed) {
         return 0;
     }
     return resize(ht, size, malloc_failed);
+}
+
+static inline uint8_t entryHash(bucket *b, int pos) {
+    return b->hashes[pos] & 0x7F;
 }
 
 /* Finds an entry matching the key. If a match is found, returns a pointer to
@@ -695,9 +864,12 @@ static bucket *findBucket(hashtable *ht, uint64_t hash, const void *key, int *po
         do {
             /* Find candidate entries with presence flag set and matching h2 hash. */
             for (int pos = 0; pos < numBucketPositions(b); pos++) {
-                if (isPositionFilled(b, pos) && b->hashes[pos] == h2) {
+                if (isTxEntryEligibleForGC(b, pos)) {
+                    txEntryGC(ht, table, b, pos);
+                }
+                if (isPositionFilled(b, pos) && isTxVisible(b, pos) && entryHash(b, pos) == h2) {
                     /* It's a candidate. */
-                    void *entry = b->entries[pos];
+                    void *entry = getEntry(b, pos);
                     const void *elem_key = entryGetKey(ht, entry);
                     if (compareKeys(ht, key, elem_key) == 0) {
                         /* It's a match. */
@@ -862,15 +1034,19 @@ static bucket *findBucketForInsert(hashtable *ht, uint64_t hash, int *pos_in_buc
 
 /* Helper to insert an entry. Doesn't check if an entry with a matching key
  * already exists. This must be ensured by the caller. */
-static void insert(hashtable *ht, uint64_t hash, void *entry) {
+static void insert(hashtable *ht, const transaction *tx, uint64_t hash, void *entry) {
     hashtableExpandIfNeeded(ht);
     rehashStepOnWriteIfNeeded(ht);
     int pos_in_bucket;
     int table_index;
     bucket *b = findBucketForInsert(ht, hash, &pos_in_bucket, &table_index);
-    b->entries[pos_in_bucket] = entry;
     b->presence |= (1 << pos_in_bucket);
     b->hashes[pos_in_bucket] = highBits(hash);
+    if (tx != NULL) {
+        newTxEntry(ht, table_index, b, pos_in_bucket, INSERT, entry, NULL, tx);
+    } else {
+        b->entries[pos_in_bucket] = entry;
+    }
     ht->used[table_index]++;
 }
 
@@ -1032,16 +1208,23 @@ void hashtableEmpty(hashtable *ht, void(callback)(hashtable *)) {
         if (ht->bucket_exp[table_index] < 0) {
             continue;
         }
-        if (ht->used[table_index] > 0 || ht->child_buckets[table_index] > 0) {
+        if (ht->used[table_index] > 0 || ht->child_buckets[table_index] > 0 || ht->txEntries[table_index] > 0) {
             for (size_t idx = 0; idx < numBuckets(ht->bucket_exp[table_index]); idx++) {
                 if (callback && (idx & 65535) == 0) callback(ht);
                 bucket *b = &ht->tables[table_index][idx];
                 do {
                     /* Call the destructor with each entry. */
-                    if (ht->type->entryDestructor != NULL && b->presence != 0) {
+                    if (b->presence != 0) {
                         for (int pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
                             if (isPositionFilled(b, pos)) {
-                                ht->type->entryDestructor(b->entries[pos]);
+                                if (isTxEntryEligibleForGC(b, pos)) {
+                                    txEntryGC(ht, table_index, b, pos);
+                                    if (!isPositionFilled(b, pos)) continue;
+                                }
+
+                                if (ht->type->entryDestructor != NULL) {
+                                    ht->type->entryDestructor(b->entries[pos]);
+                                }
                             }
                         }
                     }
@@ -1268,7 +1451,7 @@ int hashtableFind(hashtable *ht, const void *key, void **found) {
     int pos_in_bucket = 0;
     bucket *b = findBucket(ht, hash, key, &pos_in_bucket, NULL);
     if (b) {
-        if (found) *found = b->entries[pos_in_bucket];
+        if (found) *found = getEntry(b, pos_in_bucket);
         return 1;
     } else {
         return 0;
@@ -1285,28 +1468,29 @@ void **hashtableFindRef(hashtable *ht, const void *key) {
     uint64_t hash = hashKey(ht, key);
     int pos_in_bucket = 0;
     bucket *b = findBucket(ht, hash, key, &pos_in_bucket, NULL);
+    // TODO: GC txEntry if committed or rolledback
     return b ? &b->entries[pos_in_bucket] : NULL;
 }
 
 /* Adds an entry. Returns 1 on success. Returns 0 if there was already an entry
  * with the same key. */
-int hashtableAdd(hashtable *ht, void *entry) {
-    return hashtableAddOrFind(ht, entry, NULL);
+int hashtableAdd(hashtable *ht, const transaction *tx, void *entry) {
+    return hashtableAddOrFind(ht, tx, entry, NULL);
 }
 
 /* Adds an entry and returns 1 on success. Returns 0 if there was already an
  * entry with the same key and, if an 'existing' pointer is provided, it is
  * pointed to the existing entry. */
-int hashtableAddOrFind(hashtable *ht, void *entry, void **existing) {
+int hashtableAddOrFind(hashtable *ht, const transaction *tx, void *entry, void **existing) {
     const void *key = entryGetKey(ht, entry);
     uint64_t hash = hashKey(ht, key);
     int pos_in_bucket = 0;
     bucket *b = findBucket(ht, hash, key, &pos_in_bucket, NULL);
     if (b != NULL) {
-        if (existing) *existing = b->entries[pos_in_bucket];
+        if (existing) *existing = getEntry(b, pos_in_bucket);
         return 0;
     } else {
-        insert(ht, hash, entry);
+        insert(ht, tx, hash, entry);
         return 1;
     }
 }
@@ -1345,7 +1529,7 @@ int hashtableFindPositionForInsert(hashtable *ht, void *key, hashtablePosition *
     int pos_in_bucket, table_index;
     bucket *b = findBucket(ht, hash, key, &pos_in_bucket, NULL);
     if (b != NULL) {
-        if (existing) *existing = b->entries[pos_in_bucket];
+        if (existing) *existing = getEntry(b, pos_in_bucket);
         return 0;
     } else {
         hashtableExpandIfNeeded(ht);
@@ -1371,14 +1555,18 @@ int hashtableFindPositionForInsert(hashtable *ht, void *key, hashtablePosition *
  * finding the position. You must not access the hashtable in any way between
  * hashtableFindPositionForInsert() and hashtableInsertAtPosition(), since even a
  * hashtableFind() may cause incremental rehashing to move entries in memory. */
-void hashtableInsertAtPosition(hashtable *ht, void *entry, hashtablePosition *pos) {
+void hashtableInsertAtPosition(hashtable *ht, const transaction *tx, void *entry, hashtablePosition *pos) {
     position *p = positionFromOpaque(pos);
     bucket *b = p->bucket;
     int pos_in_bucket = p->pos_in_bucket;
     int table_index = p->table_index;
     assert(!isPositionFilled(b, pos_in_bucket));
     b->presence |= (1 << pos_in_bucket);
-    b->entries[pos_in_bucket] = entry;
+    if (tx != NULL) {
+        newTxEntry(ht, table_index, b, pos_in_bucket, INSERT, entry, NULL, tx);
+    } else {
+        b->entries[pos_in_bucket] = entry;
+    }
     ht->used[table_index]++;
     /* Hash bits are already set by hashtableFindPositionForInsert. */
 }
@@ -1386,16 +1574,43 @@ void hashtableInsertAtPosition(hashtable *ht, void *entry, hashtablePosition *po
 /* Removes the entry with the matching key and returns it. The entry
  * destructor is not called. Returns 1 and points 'popped' to the entry if a
  * matching entry was found. Returns 0 if no matching entry was found. */
-int hashtablePop(hashtable *ht, const void *key, void **popped) {
+int hashtablePop(hashtable *ht, const transaction *tx, const void *key, void **popped) {
     if (hashtableSize(ht) == 0) return 0;
     uint64_t hash = hashKey(ht, key);
     int pos_in_bucket = 0;
     int table_index = 0;
     bucket *b = findBucket(ht, hash, key, &pos_in_bucket, &table_index);
     if (b) {
-        if (popped) *popped = b->entries[pos_in_bucket];
-        b->presence &= ~(1 << pos_in_bucket);
+        if (isTxEntryEligibleForGC(b, pos_in_bucket)) {
+            txEntryGC(ht, table_index, b, pos_in_bucket);
+        }
+
+        void *entry = b->entries[pos_in_bucket];
+
+        if (tx != NULL && !IS_TX_ENTRY(b, pos_in_bucket)) {
+            newTxEntry(ht, table_index, b, pos_in_bucket, DELETE, NULL, entry, tx);
+            if (popped) *popped = entry;
+            ht->used[table_index]--;
+            return 1;
+        }
+
+        if (tx != NULL && IS_TX_ENTRY(b, pos_in_bucket)) {
+            txEntry *txE = entry;
+            assert(transactionIsUncommitted(txE->tx));
+            assert(txE->tx == tx);
+            assert(txE->type == INSERT);
+            entry = getEntry(b, pos_in_bucket);
+            transactionReleaseRef(txE->tx);
+            UNSET_TX_ENTRY_PTR(b, pos_in_bucket);
+            zfree(txE);
+            ht->txEntries[table_index]--;
+        }
+
         ht->used[table_index]--;
+
+        if (popped) *popped = entry;
+        b->presence &= ~(1 << pos_in_bucket);
+
         if (b->chained && !hashtableIsRehashingPaused(ht)) {
             /* Rehashing is paused while iterating and when a scan callback is
              * running. In those cases, we do the compaction in the scan and
@@ -1411,9 +1626,9 @@ int hashtablePop(hashtable *ht, const void *key, void **popped) {
 
 /* Deletes the entry with the matching key. Returns 1 if an entry was
  * deleted, 0 if no matching entry was found. */
-int hashtableDelete(hashtable *ht, const void *key) {
+int hashtableDelete(hashtable *ht, const transaction *tx, const void *key) {
     void *entry;
-    if (hashtablePop(ht, key, &entry)) {
+    if (hashtablePop(ht, tx, key, &entry)) {
         freeEntry(ht, entry);
         return 1;
     } else {
@@ -1441,9 +1656,15 @@ int hashtableReplaceReallocatedEntry(hashtable *ht, const void *old_entry, void 
         bucket *b = &ht->tables[table][bucket_idx];
         do {
             for (int pos = 0; pos < numBucketPositions(b); pos++) {
-                if (isPositionFilled(b, pos) && b->hashes[pos] == h2 && b->entries[pos] == old_entry) {
+                if (isPositionFilled(b, pos) && entryHash(b, pos) == h2 && getEntry(b, pos) == old_entry) {
                     /* It's a match. */
-                    b->entries[pos] = new_entry;
+                    if (IS_TX_ENTRY(b, pos)) {
+                        txEntry *txE = b->entries[pos];
+                        assert(txE->type != DELETE && txE->type != POPDELETE);
+                        txE->new = new_entry;
+                    } else {
+                        b->entries[pos] = new_entry;
+                    }
                     return 1;
                 }
             }
@@ -1499,12 +1720,16 @@ void **hashtableTwoPhasePopFindRef(hashtable *ht, const void *key, hashtablePosi
     if (b) {
         hashtablePauseRehashing(ht);
 
+        if (isTxEntryEligibleForGC(b, pos_in_bucket)) {
+            txEntryGC(ht, table_index, b, pos_in_bucket);
+        }
+
         /* Store position. */
         assert(p != NULL);
         p->bucket = b;
         p->pos_in_bucket = pos_in_bucket;
         p->table_index = table_index;
-        return &b->entries[pos_in_bucket];
+        return getEntryRef(b, pos_in_bucket);
     } else {
         return NULL;
     }
@@ -1513,7 +1738,7 @@ void **hashtableTwoPhasePopFindRef(hashtable *ht, const void *key, hashtablePosi
 /* Clears the position of the entry in the hashtable and resumes rehashing. The
  * entry destructor is NOT called. The position is acquired using a preceding
  * call to hashtableTwoPhasePopFindRef(). */
-void hashtableTwoPhasePopDelete(hashtable *ht, hashtablePosition *pos) {
+void hashtableTwoPhasePopDelete(hashtable *ht, const transaction *tx, hashtablePosition *pos) {
     /* Read position. */
     position *p = positionFromOpaque(pos);
     bucket *b = p->bucket;
@@ -1522,8 +1747,29 @@ void hashtableTwoPhasePopDelete(hashtable *ht, hashtablePosition *pos) {
 
     /* Delete the entry and resume rehashing. */
     assert(isPositionFilled(b, pos_in_bucket));
-    b->presence &= ~(1 << pos_in_bucket);
+
+    void *entry = b->entries[pos_in_bucket];
+    if (tx != NULL && !IS_TX_ENTRY(b, pos_in_bucket)) {
+        newTxEntry(ht, table_index, b, pos_in_bucket, POPDELETE, NULL, entry, tx);
+        ht->used[table_index]--;
+        return;
+    }
+
+    if (tx != NULL && IS_TX_ENTRY(b, pos_in_bucket)) {
+        txEntry *txE = entry;
+        assert(transactionIsUncommitted(txE->tx));
+        assert(txE->tx == tx);
+        assert(txE->type == INSERT);
+        transactionReleaseRef(txE->tx);
+        UNSET_TX_ENTRY_PTR(b, pos_in_bucket);
+        zfree(txE);
+        ht->txEntries[table_index]--;
+    }
+
     ht->used[table_index]--;
+
+    b->presence &= ~(1 << pos_in_bucket);
+
     hashtableResumeRehashing(ht);
     if (b->chained && !hashtableIsRehashingPaused(ht)) {
         /* Rehashing paused also means bucket chain compaction paused. It is
@@ -1566,7 +1812,7 @@ int hashtableIncrementalFindStep(hashtableIncrementalFindState *state) {
         /* Current entry is prefetched. Now check if it's a match. */
         {
             hashtable *ht = data->hashtable;
-            void *entry = data->bucket->entries[data->pos];
+            void *entry = getEntry(data->bucket, data->pos);
             const void *elem_key = entryGetKey(ht, entry);
             if (compareKeys(ht, data->key, elem_key) == 0) {
                 /* It's a match. */
@@ -1584,7 +1830,10 @@ int hashtableIncrementalFindStep(hashtableIncrementalFindState *state) {
             bucket *b = data->bucket;
             uint8_t h2 = highBits(data->hash);
             for (int pos = data->pos; pos < numBucketPositions(b); pos++) {
-                if (isPositionFilled(b, pos) && b->hashes[pos] == h2) {
+                if (isTxEntryEligibleForGC(b, pos)) {
+                    txEntryGC(data->hashtable, data->table, b, pos);
+                }
+                if (isPositionFilled(b, pos) && entryHash(b, pos) == h2) {
                     /* It's a candidate. */
                     valkey_prefetch(b->entries[pos]);
                     data->pos = pos;
@@ -1642,7 +1891,7 @@ int hashtableIncrementalFindStep(hashtableIncrementalFindState *state) {
 int hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, void **found) {
     incrementalFind *data = incrementalFindFromOpaque(state);
     if (data->state == HASHTABLE_FOUND) {
-        if (found) *found = data->bucket->entries[data->pos];
+        if (found) *found = getEntry(data->bucket, data->pos);
         return 1;
     } else {
         assert(data->state == HASHTABLE_NOT_FOUND);
@@ -1723,7 +1972,10 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
                 int pos;
                 for (pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
                     if (isPositionFilled(b, pos)) {
-                        void *emit = emit_ref ? &b->entries[pos] : b->entries[pos];
+                        if (isTxEntryEligibleForGC(b, pos)) {
+                            txEntryGC(ht, 0, b, pos);
+                        }
+                        void *emit = emit_ref ? getEntryRef(b, pos) : getEntry(b, pos);
                         fn(privdata, emit);
                     }
                 }
@@ -1760,7 +2012,10 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
                 if (b->presence) {
                     for (int pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
                         if (isPositionFilled(b, pos)) {
-                            void *emit = emit_ref ? &b->entries[pos] : b->entries[pos];
+                            if (isTxEntryEligibleForGC(b, pos)) {
+                                txEntryGC(ht, table_small, b, pos);
+                            }
+                            void *emit = emit_ref ? getEntryRef(b, pos) : getEntry(b, pos);
                             fn(privdata, emit);
                         }
                     }
@@ -1790,7 +2045,10 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
                     if (b->presence) {
                         for (int pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
                             if (isPositionFilled(b, pos)) {
-                                void *emit = emit_ref ? &b->entries[pos] : b->entries[pos];
+                                if (isTxEntryEligibleForGC(b, pos)) {
+                                    txEntryGC(ht, table_large, b, pos);
+                                }
+                                void *emit = emit_ref ? getEntryRef(b, pos) : getEntry(b, pos);
                                 fn(privdata, emit);
                             }
                         }
@@ -1978,9 +2236,14 @@ int hashtableNext(hashtableIterator *iterator, void **elemptr) {
             /* No entry here. */
             continue;
         }
+
+        if (isTxEntryEligibleForGC(b, iter->pos_in_bucket)) {
+            txEntryGC(iter->hashtable, iter->table, b, iter->pos_in_bucket);
+        }
+
         /* Return the entry at this position. */
         if (elemptr) {
-            *elemptr = b->entries[iter->pos_in_bucket];
+            *elemptr = getEntry(b, iter->pos_in_bucket);
         }
         return 1;
     }

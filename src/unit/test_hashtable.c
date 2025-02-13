@@ -3,6 +3,7 @@
 #include "../mt19937-64.h"
 #include "../zmalloc.h"
 #include "../monotonic.h"
+#include "../transaction.h"
 
 #include <stdio.h>
 #include <limits.h>
@@ -112,11 +113,25 @@ int test_set_hash_function_seed(int argc, char **argv, int flags) {
     return 0;
 }
 
-static int add_find_delete_test_helper(int flags) {
+static int check_use_tx_param(int argc, char **argv) {
+    for (int i = 0; i < argc; i++) {
+        if (strcasecmp(argv[i], "--use-tx") == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int add_find_delete_test_helper(int flags, int use_tx) {
     int count = (flags & UNIT_TEST_ACCURATE) ? 1000000 : 200;
     TEST_ASSERT(mem_usage == 0);
     hashtable *ht = hashtableCreate(&keyval_type);
+    const transaction *tx = NULL;
     int j;
+
+    if (use_tx) {
+        tx = transactionStart();
+    }
 
     /* Add */
     for (j = 0; j < count; j++) {
@@ -124,7 +139,7 @@ static int add_find_delete_test_helper(int flags) {
         snprintf(key, sizeof(key), "%d", j);
         snprintf(val, sizeof(val), "%d", count - j + 42);
         keyval *e = create_keyval(key, val);
-        TEST_ASSERT(hashtableAdd(ht, e));
+        TEST_ASSERT(hashtableAdd(ht, tx, e));
     }
     TEST_ASSERT(hashtableMemUsage(ht) == mem_usage);
 
@@ -153,15 +168,19 @@ static int add_find_delete_test_helper(int flags) {
             char val[32];
             snprintf(val, sizeof(val), "%d", count - j + 42);
             void *popped;
-            TEST_ASSERT(hashtablePop(ht, key, &popped));
+            TEST_ASSERT(hashtablePop(ht, tx, key, &popped));
             keyval *e = popped;
             TEST_ASSERT(!strcmp(val, getval(e)));
             free(e);
         } else {
-            TEST_ASSERT(hashtableDelete(ht, key));
+            TEST_ASSERT(hashtableDelete(ht, tx, key));
         }
     }
     TEST_ASSERT(hashtableMemUsage(ht) == mem_usage);
+
+    if (use_tx) {
+        transactionCommit(tx);
+    }
 
     /* Empty, i.e. delete remaining entries, with progress callback. */
     empty_callback_call_counter = 0;
@@ -175,29 +194,31 @@ static int add_find_delete_test_helper(int flags) {
 }
 
 int test_add_find_delete(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    TEST_ASSERT(add_find_delete_test_helper(flags) == 0);
+    int use_tx = check_use_tx_param(argc, argv);
+    TEST_ASSERT(add_find_delete_test_helper(flags, use_tx) == 0);
     TEST_ASSERT(zmalloc_used_memory() == 0);
     return 0;
 }
 
 int test_add_find_delete_avoid_resize(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
+    int use_tx = check_use_tx_param(argc, argv);
     hashtableSetResizePolicy(HASHTABLE_RESIZE_AVOID);
-    TEST_ASSERT(add_find_delete_test_helper(flags) == 0);
+    TEST_ASSERT(add_find_delete_test_helper(flags, use_tx) == 0);
     hashtableSetResizePolicy(HASHTABLE_RESIZE_ALLOW);
     TEST_ASSERT(zmalloc_used_memory() == 0);
     return 0;
 }
 
 int test_instant_rehashing(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
     UNUSED(flags);
+    int use_tx = check_use_tx_param(argc, argv);
+    const transaction *tx = NULL;
 
     long count = 200;
+
+    if (use_tx) {
+        tx = transactionStart();
+    }
 
     /* A set of longs, i.e. pointer-sized values. */
     hashtableType type = {.instant_rehashing = 1};
@@ -206,60 +227,97 @@ int test_instant_rehashing(int argc, char **argv, int flags) {
 
     /* Populate and check that rehashing is never ongoing. */
     for (j = 0; j < count; j++) {
-        TEST_ASSERT(hashtableAdd(ht, (void *)j));
+        TEST_ASSERT(hashtableAdd(ht, tx, (void *)j));
         TEST_ASSERT(!hashtableIsRehashing(ht));
+    }
+
+    if (use_tx) {
+        transactionCommit(tx);
+    }
+
+    if (use_tx) {
+        tx = transactionStart();
     }
 
     /* Delete and check that rehashing is never ongoing. */
     for (j = 0; j < count; j++) {
-        TEST_ASSERT(hashtableDelete(ht, (void *)j));
+        TEST_ASSERT(hashtableDelete(ht, tx, (void *)j));
         TEST_ASSERT(!hashtableIsRehashing(ht));
     }
 
+    if (use_tx) {
+        transactionCommit(tx);
+    }
+
     hashtableRelease(ht);
+
+    TEST_ASSERT(zmalloc_used_memory() == 0);
     return 0;
 }
 
 int test_bucket_chain_length(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
     UNUSED(flags);
+    int use_tx = check_use_tx_param(argc, argv);
+    const transaction *tx = NULL;
 
     unsigned long count = 1000000;
+
+    if (use_tx) {
+        tx = transactionStart();
+    }
 
     /* A set of longs, i.e. pointer-sized integer values. */
     hashtableType type = {0};
     hashtable *ht = hashtableCreate(&type);
     unsigned long j;
     for (j = 0; j < count; j++) {
-        TEST_ASSERT(hashtableAdd(ht, (void *)j));
+        TEST_ASSERT(hashtableAdd(ht, tx, (void *)j));
     }
     /* If it's rehashing, add a few more until rehashing is complete. */
     while (hashtableIsRehashing(ht)) {
         j++;
-        TEST_ASSERT(hashtableAdd(ht, (void *)j));
+        TEST_ASSERT(hashtableAdd(ht, tx, (void *)j));
     }
     TEST_ASSERT(j < count * 2);
     int max_chainlen_not_rehashing = hashtableLongestBucketChain(ht);
     TEST_ASSERT(max_chainlen_not_rehashing < 10);
 
+    if (use_tx) {
+        transactionCommit(tx);
+    }
+
+    if (use_tx) {
+        tx = transactionStart();
+    }
+
     /* Add more until rehashing starts again. */
     while (!hashtableIsRehashing(ht)) {
         j++;
-        TEST_ASSERT(hashtableAdd(ht, (void *)j));
+        TEST_ASSERT(hashtableAdd(ht, tx, (void *)j));
     }
     TEST_ASSERT(j < count * 2);
     int max_chainlen_rehashing = hashtableLongestBucketChain(ht);
     TEST_ASSERT(max_chainlen_rehashing < 10);
 
+    if (use_tx) {
+        transactionCommit(tx);
+    }
+
     hashtableRelease(ht);
+
+    TEST_ASSERT(zmalloc_used_memory() == 0);
+
     return 0;
 }
 
 int test_two_phase_insert_and_pop(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
     UNUSED(flags);
+    int use_tx = check_use_tx_param(argc, argv);
+    const transaction *tx = NULL;
+
+    if (use_tx) {
+        tx = transactionStart();
+    }
 
     int count = (flags & UNIT_TEST_ACCURATE) ? 1000000 : 200;
     hashtable *ht = hashtableCreate(&keyval_type);
@@ -274,11 +332,19 @@ int test_two_phase_insert_and_pop(int argc, char **argv, int flags) {
         int ret = hashtableFindPositionForInsert(ht, key, &position, NULL);
         TEST_ASSERT(ret == 1);
         keyval *e = create_keyval(key, val);
-        hashtableInsertAtPosition(ht, e, &position);
+        hashtableInsertAtPosition(ht, tx, e, &position);
     }
 
     if (count < 1000) {
         hashtableHistogram(ht);
+    }
+
+    if (use_tx) {
+        transactionCommit(tx);
+    }
+
+    if (use_tx) {
+        tx = transactionStart();
     }
 
     /* Check that all entries were inserted. */
@@ -304,20 +370,35 @@ int test_two_phase_insert_and_pop(int argc, char **argv, int flags) {
         keyval *e = *ref;
         TEST_ASSERT(!strcmp(val, getval(e)));
         TEST_ASSERT(hashtableSize(ht) == size_before_find);
-        hashtableTwoPhasePopDelete(ht, &position);
+        hashtableTwoPhasePopDelete(ht, tx, &position);
         TEST_ASSERT(hashtableSize(ht) == size_before_find - 1);
-        free(e);
+        if (tx) {
+            transactionRegisterPostCommitHandler(tx, free, e);
+        } else {
+            free(e);
+        }
     }
     TEST_ASSERT(hashtableSize(ht) == 0);
 
+    if (use_tx) {
+        transactionCommit(tx);
+    }
+
     hashtableRelease(ht);
+
+    TEST_ASSERT(zmalloc_used_memory() == 0);
+
     return 0;
 }
 
 int test_replace_reallocated_entry(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
     UNUSED(flags);
+    int use_tx = check_use_tx_param(argc, argv);
+    const transaction *tx = NULL;
+
+    if (use_tx) {
+        tx = transactionStart();
+    }
 
     int count = 100, j;
     hashtable *ht = hashtableCreate(&keyval_type);
@@ -328,7 +409,7 @@ int test_replace_reallocated_entry(int argc, char **argv, int flags) {
         snprintf(key, sizeof(key), "%d", j);
         snprintf(val, sizeof(val), "%d", count - j + 42);
         keyval *e = create_keyval(key, val);
-        TEST_ASSERT(hashtableAdd(ht, e));
+        TEST_ASSERT(hashtableAdd(ht, tx, e));
     }
 
     /* Find and replace */
@@ -352,6 +433,10 @@ int test_replace_reallocated_entry(int argc, char **argv, int flags) {
         free(old);
     }
 
+    if (use_tx) {
+        transactionCommit(tx);
+    }
+
     /* Check */
     for (j = 0; j < count; j++) {
         char key[32], val[32];
@@ -369,9 +454,13 @@ int test_replace_reallocated_entry(int argc, char **argv, int flags) {
 }
 
 int test_incremental_find(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
     UNUSED(flags);
+    int use_tx = check_use_tx_param(argc, argv);
+    const transaction *tx = NULL;
+
+    if (use_tx) {
+        tx = transactionStart();
+    }
 
     size_t count = 2000000;
     uint8_t element_array[count];
@@ -383,7 +472,11 @@ int test_incremental_find(int argc, char **argv, int flags) {
 
     /* Populate */
     for (size_t j = 0; j < count; j++) {
-        TEST_ASSERT(hashtableAdd(ht, element_array + j));
+        TEST_ASSERT(hashtableAdd(ht, tx, element_array + j));
+    }
+
+    if (use_tx) {
+        transactionCommit(tx);
     }
 
     monotime timer;
@@ -394,7 +487,11 @@ int test_incremental_find(int argc, char **argv, int flags) {
     for (size_t i = 0; i < count; i++) {
         uint8_t *key = &element_array[i];
         void *found;
-        TEST_ASSERT(hashtableFind(ht, key, &found) == 1);
+        int res = hashtableFind(ht, key, &found);
+        if (res != 1) {
+            hashtableFind(ht, key, &found);
+            TEST_ASSERT(0);
+        }
         TEST_ASSERT(found == key);
     }
     uint64_t us2 = elapsedUs(timer);
@@ -451,9 +548,9 @@ void scanfn(void *privdata, void *entry) {
 }
 
 int test_scan(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
     UNUSED(flags);
+    int use_tx = check_use_tx_param(argc, argv);
+    const transaction *tx = NULL;
 
     long num_entries = (flags & UNIT_TEST_LARGE_MEMORY) ? 1000000 : 200000;
     int num_rounds = (flags & UNIT_TEST_ACCURATE) ? 20 : 5;
@@ -469,10 +566,18 @@ int test_scan(int argc, char **argv, int flags) {
         /* Seed, to make sure each round is different. */
         randomSeed();
 
+        if (use_tx) {
+            tx = transactionStart();
+        }
+
         /* Populate */
         hashtable *ht = hashtableCreate(&type);
         for (j = 0; j < count; j++) {
-            TEST_ASSERT(hashtableAdd(ht, (void *)j));
+            TEST_ASSERT(hashtableAdd(ht, tx, (void *)j));
+        }
+
+        if (use_tx) {
+            transactionCommit(tx);
         }
 
         /* Scan */
@@ -529,9 +634,13 @@ static uint64_t mock_hash_entry_get_hash(const void *entry) {
 }
 
 int test_iterator(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
     UNUSED(flags);
+    int use_tx = check_use_tx_param(argc, argv);
+    const transaction *tx = NULL;
+
+    if (use_tx) {
+        tx = transactionStart();
+    }
 
     size_t count = 2000000;
     uint8_t entry_array[count];
@@ -543,7 +652,7 @@ int test_iterator(int argc, char **argv, int flags) {
 
     /* Populate */
     for (size_t j = 0; j < count; j++) {
-        TEST_ASSERT(hashtableAdd(ht, entry_array + j));
+        TEST_ASSERT(hashtableAdd(ht, tx, entry_array + j));
     }
 
     /* Iterate */
@@ -560,6 +669,10 @@ int test_iterator(int argc, char **argv, int flags) {
     }
     hashtableResetIterator(&iter);
 
+    if (use_tx) {
+        transactionCommit(tx);
+    }
+
     /* Check that all entries were returned exactly once. */
     TEST_ASSERT(num_returned == count);
     for (size_t j = 0; j < count; j++) {
@@ -574,9 +687,13 @@ int test_iterator(int argc, char **argv, int flags) {
 }
 
 int test_safe_iterator(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
     UNUSED(flags);
+    int use_tx = check_use_tx_param(argc, argv);
+    const transaction *tx = NULL;
+
+    if (use_tx) {
+        tx = transactionStart();
+    }
 
     size_t count = 1000;
     uint8_t entry_counts[count * 2];
@@ -588,7 +705,7 @@ int test_safe_iterator(int argc, char **argv, int flags) {
 
     /* Populate */
     for (size_t j = 0; j < count; j++) {
-        TEST_ASSERT(hashtableAdd(ht, entry_counts + j));
+        TEST_ASSERT(hashtableAdd(ht, NULL, entry_counts + j));
     }
 
     /* Iterate */
@@ -604,14 +721,18 @@ int test_safe_iterator(int argc, char **argv, int flags) {
         /* increment entry at this position as a counter */
         (*entry)++;
         if (index % 4 == 0) {
-            TEST_ASSERT(hashtableDelete(ht, entry));
+            TEST_ASSERT(hashtableDelete(ht, NULL, entry));
         }
         /* Add new item each time we see one of the original items */
         if (index < count) {
-            TEST_ASSERT(hashtableAdd(ht, entry + count));
+            TEST_ASSERT(hashtableAdd(ht, NULL, entry + count));
         }
     }
     hashtableResetIterator(&iter);
+
+    if (use_tx) {
+        transactionCommit(tx);
+    }
 
     /* Check that all entries present during the whole iteration were returned
      * exactly once. (Some are deleted after being returned.) */
@@ -636,9 +757,13 @@ int test_safe_iterator(int argc, char **argv, int flags) {
 }
 
 int test_compact_bucket_chain(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
     UNUSED(flags);
+    int use_tx = check_use_tx_param(argc, argv);
+    const transaction *tx = NULL;
+
+    if (use_tx) {
+        tx = transactionStart();
+    }
 
     /* Create a table with only one bucket chain. */
     hashtableSetResizePolicy(HASHTABLE_RESIZE_AVOID);
@@ -650,7 +775,7 @@ int test_compact_bucket_chain(int argc, char **argv, int flags) {
     /* Populate */
     unsigned long j;
     for (j = 0; j < count; j++) {
-        TEST_ASSERT(hashtableAdd(ht, (void *)j));
+        TEST_ASSERT(hashtableAdd(ht, NULL, (void *)j));
     }
     TEST_ASSERT(hashtableBuckets(ht) == 1);
     printf("Populated a single bucket chain, avoiding resize.\n");
@@ -669,7 +794,7 @@ int test_compact_bucket_chain(int argc, char **argv, int flags) {
         TEST_ASSERT(hashtableChainedBuckets(ht, 0) == num_chained_buckets);
         num_returned++;
         if (num_returned % 2 == 0) {
-            TEST_ASSERT(hashtableDelete(ht, entry));
+            TEST_ASSERT(hashtableDelete(ht, NULL, entry));
         }
         if (num_returned == count) {
             printf("Last iteration. Half of them have been deleted.\n");
@@ -677,6 +802,10 @@ int test_compact_bucket_chain(int argc, char **argv, int flags) {
         }
     }
     hashtableResetIterator(&iter);
+
+    if (use_tx) {
+        transactionCommit(tx);
+    }
 
     /* Verify that the bucket chain has been compacted by filling the holes and
      * freeing empty child buckets. */
@@ -694,6 +823,13 @@ int test_random_entry(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
+    int use_tx = check_use_tx_param(argc, argv);
+    const transaction *tx = NULL;
+
+    if (use_tx) {
+        tx = transactionStart();
+    }
+
     randomSeed();
 
     size_t count = (flags & UNIT_TEST_LARGE_MEMORY) ? 7000 : 400;
@@ -707,7 +843,7 @@ int test_random_entry(int argc, char **argv, int flags) {
     unsigned times_picked[count];
     memset(times_picked, 0, sizeof(times_picked));
     for (size_t j = 0; j < count; j++) {
-        TEST_ASSERT(hashtableAdd(ht, times_picked + j));
+        TEST_ASSERT(hashtableAdd(ht, NULL, times_picked + j));
     }
 
     /* Pick entries, and count how many times each entry is picked. */
@@ -720,6 +856,11 @@ int test_random_entry(int argc, char **argv, int flags) {
         /* increment entry at this position as a counter */
         (*picked)++;
     }
+
+    if (use_tx) {
+        transactionCommit(tx);
+    }
+
     hashtableRelease(ht);
 
     /* Fairness measurement
@@ -797,9 +938,13 @@ int test_random_entry(int argc, char **argv, int flags) {
 }
 
 int test_random_entry_with_long_chain(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
     UNUSED(flags);
+    int use_tx = check_use_tx_param(argc, argv);
+    const transaction *tx = NULL;
+
+    if (use_tx) {
+        tx = transactionStart();
+    }
 
     /* We use an estimator of true probability.
      * We determine how many samples to take based on how precise of a
@@ -844,12 +989,12 @@ int test_random_entry_with_long_chain(int argc, char **argv, int flags) {
     for (size_t i = 0; i < num_random_entries; i++) {
         uint64_t random_hash = (uint64_t)genrand64_int64();
         if (random_hash == chain_hash) random_hash++;
-        hashtableAdd(ht, mock_hash_entry_create(random_hash, 0));
+        hashtableAdd(ht, NULL, mock_hash_entry_create(random_hash, 0));
     }
 
     /* create long chain */
     for (size_t i = 0; i < num_chained_entries; i++) {
-        hashtableAdd(ht, mock_hash_entry_create(i, chain_hash));
+        hashtableAdd(ht, NULL, mock_hash_entry_create(i, chain_hash));
     }
 
     TEST_ASSERT(!hashtableIsRehashing(ht));
@@ -875,7 +1020,125 @@ int test_random_entry_with_long_chain(int argc, char **argv, int flags) {
            deviation * 100, precision * 100);
     TEST_ASSERT(deviation <= precision + acceptable_probability_deviation);
 
+    if (use_tx) {
+        transactionCommit(tx);
+    }
+
     hashtableRelease(ht);
+    return 0;
+}
+
+int test_transaction_rollback_after_rehashing(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    const transaction *tx = NULL;
+    unsigned long count = 1000000;
+
+    tx = transactionStart();
+
+    hashtableType type = {0};
+    hashtable *ht = hashtableCreate(&type);
+
+    TEST_ASSERT(hashtableSize(ht) == 0);
+
+    unsigned long j;
+    for (j = 0; j < count; j++) {
+        TEST_ASSERT(hashtableAdd(ht, tx, (void *)j));
+    }
+
+    transactionRollback(tx);
+    TEST_ASSERT(hashtableSize(ht) == 0);
+
+    for (j = 0; j < count; j++) {
+        TEST_ASSERT(hashtableAdd(ht, NULL, (void *)j));
+    }
+
+    tx = transactionStart();
+
+    /* If it's rehashing, add a few more until rehashing is complete. */
+    while (hashtableIsRehashing(ht)) {
+        j++;
+        TEST_ASSERT(hashtableAdd(ht, tx, (void *)j));
+    }
+    TEST_ASSERT(j < count * 2);
+    int max_chainlen_not_rehashing = hashtableLongestBucketChain(ht);
+    TEST_ASSERT(max_chainlen_not_rehashing < 10);
+
+    transactionCommit(tx);
+
+    /* Add more until rehashing starts again. */
+    while (!hashtableIsRehashing(ht)) {
+        j++;
+        TEST_ASSERT(hashtableAdd(ht, NULL, (void *)j));
+    }
+    TEST_ASSERT(j < count * 2);
+    int max_chainlen_rehashing = hashtableLongestBucketChain(ht);
+    TEST_ASSERT(max_chainlen_rehashing < 10);
+
+    hashtableRelease(ht);
+
+    TEST_ASSERT(zmalloc_used_memory() == 0);
+
+    return 0;
+}
+
+int test_transaction_rollback(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    const transaction *tx = NULL;
+    unsigned long count = 10;
+
+    hashtableType type = {0};
+    hashtable *ht = hashtableCreate(&type);
+
+    TEST_ASSERT(hashtableSize(ht) == 0);
+
+    unsigned long j;
+    for (j = 0; j < count; j++) {
+        TEST_ASSERT(hashtableAdd(ht, NULL, (void *)j));
+    }
+    TEST_ASSERT(hashtableSize(ht) == count);
+
+    tx = transactionStart();
+    TEST_ASSERT(hashtableAdd(ht, tx, (void *)10));
+    TEST_ASSERT(hashtableSize(ht) == count + 1);
+    transactionRollback(tx);
+    TEST_ASSERT(hashtableSize(ht) == count);
+
+    tx = transactionStart();
+    TEST_ASSERT(hashtableDelete(ht, tx, (void *)9));
+    TEST_ASSERT(hashtableSize(ht) == count - 1);
+    transactionRollback(tx);
+    TEST_ASSERT(hashtableSize(ht) == count);
+
+    tx = transactionStart();
+    TEST_ASSERT(hashtableDelete(ht, tx, (void *)9));
+    TEST_ASSERT(hashtableAdd(ht, tx, (void *)9));
+    TEST_ASSERT(hashtableSize(ht) == count);
+    transactionRollback(tx);
+    TEST_ASSERT(hashtableSize(ht) == count);
+
+    tx = transactionStart();
+    TEST_ASSERT(hashtableAdd(ht, tx, (void *)10));
+    TEST_ASSERT(hashtableDelete(ht, tx, (void *)10));
+    TEST_ASSERT(hashtableSize(ht) == count);
+    transactionRollback(tx);
+    TEST_ASSERT(hashtableSize(ht) == count);
+
+    for (j = 0; j < count; j++) {
+        unsigned long found;
+        hashtableFind(ht, (void *)j, (void **)&found);
+        TEST_ASSERT(found == j);
+    }
+
+    hashtableRelease(ht);
+
+    TEST_ASSERT(zmalloc_used_memory() == 0);
+
     return 0;
 }
 
