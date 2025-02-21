@@ -350,6 +350,9 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 /* Client capabilities */
 #define CLIENT_CAPA_REDIRECT (1 << 0) /* Indicate that the client can handle redirection */
 
+/* The transaction object forward declaration */
+typedef struct transaction transaction;
+
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
 typedef enum blocking_type {
@@ -1266,6 +1269,7 @@ typedef struct client {
     sds peerid;                  /* Cached peer ID. */
     sds sockname;                /* Cached connection target address. */
     time_t ctime;                /* Client creation time. */
+    const transaction *tx;             /* The client transaction pointer. */
 #ifdef LOG_REQ_RES
     clientReqResInfo reqres;
 #endif
@@ -3867,6 +3871,7 @@ void lcsCommand(client *c);
 void quitCommand(client *c);
 void resetCommand(client *c);
 void failoverCommand(client *c);
+void transactionCommand(client *c);
 
 #if defined(__GNUC__)
 void *calloc(size_t count, size_t size) __attribute__((deprecated));

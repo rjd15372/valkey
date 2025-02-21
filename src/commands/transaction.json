@@ -1,0 +1,9 @@
+{
+    "TRANSACTION": {
+        "summary": "A container for transaction commands.",
+        "complexity": "Depends on subcommand.",
+        "group": "server",
+        "since": "8.0.0",
+        "arity": -2
+    }
+}

@@ -234,6 +234,7 @@ client *createClient(connection *conn) {
     c->commands_processed = 0;
     c->io_last_reply_block = NULL;
     c->io_last_bufpos = 0;
+    c->tx = NULL;
     return c;
 }
 

@@ -1,0 +1,17 @@
+{
+    "ROLLBACK": {
+        "summary": "Rollbacks the transaction for the current client.",
+        "complexity": "O(1)",
+        "group": "server",
+        "since": "8.0.0",
+        "arity": -2,
+        "container": "TRANSACTION",
+        "function": "transactionCommand",
+        "command_flags": [
+            "FAST"
+        ],
+        "reply_schema": {
+            "const": "OK"
+        }
+    }
+}

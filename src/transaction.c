@@ -1,6 +1,9 @@
 #include "transaction.h"
 #include "serverassert.h"
+#include "server.h"
 #include "zmalloc.h"
+
+#include <strings.h>
 
 typedef struct txHandler {
     txHandlerFunc handler;
@@ -122,4 +125,29 @@ int transactionIsCommitted(const transaction *tx) {
 
 int transactionIsRolledback(const transaction *tx) {
     return tx->state == ROLLEDBACK;
+}
+
+void transactionCommand(client *c) {
+    if (!strcasecmp(c->argv[1]->ptr, "start") && c->argc == 2) {
+        c->tx = transactionStart();
+        addReplyStatus(c, "ok");
+    } else if (!strcasecmp(c->argv[1]->ptr, "commit") && c->argc == 2) {
+        if (c->tx == NULL) {
+            addReplyError(c, "No transaction has been started");
+            return;
+        }
+        transactionCommit(c->tx);
+        c->tx = NULL;
+        addReplyStatus(c, "ok");
+    } else if (!strcasecmp(c->argv[1]->ptr, "rollback") && c->argc == 2) {
+        if (c->tx == NULL) {
+            addReplyError(c, "No transaction has been started");
+            return;
+        }
+        transactionRollback(c->tx);
+        c->tx = NULL;
+        addReplyStatus(c, "ok");
+    } else {
+        assert(0);
+    }
 }
