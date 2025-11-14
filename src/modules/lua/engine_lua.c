@@ -19,7 +19,6 @@
 #include "debug_lua.h"
 
 
-#define LUA_ENGINE_NAME "LUA"
 #define REGISTRY_ERROR_HANDLER_NAME "__ERROR_HANDLER__"
 
 /* Adds server.debug() function used by lua debugger
@@ -98,7 +97,11 @@ static void luaStateInstallErrorHandler(lua_State *lua) {
 
 static void luaStateLockGlobalTable(lua_State *lua) {
     /* Lock the global table from any changes */
+#ifdef LUA_5_4
+    lua_pushglobaltable(lua);
+#else
     lua_pushvalue(lua, LUA_GLOBALSINDEX);
+#endif
     luaSetErrorMetatable(lua);
     /* Recursively lock all tables that can be reached from the global table */
     luaSetTableProtectionRecursively(lua);
@@ -170,7 +173,11 @@ static void get_version_info(ValkeyModuleCtx *ctx,
 
 static void initializeLuaState(luaEngineCtx *lua_engine_ctx,
                                ValkeyModuleScriptingEngineSubsystemType type) {
+#ifdef LUA_5_4
+    lua_State *lua = luaL_newstate();
+#else
     lua_State *lua = lua_open();
+#endif
 
     if (type == VMSE_EVAL) {
         lua_engine_ctx->eval_lua = lua;
@@ -416,7 +423,11 @@ static void luaEngineFreeFunction(ValkeyModuleCtx *module_ctx,
          * resetting the whole eval context, and therefore, we need to
          * delete the function from the lua context.
          */
+#ifdef LUA_5_4
+        luaL_unref(lua, LUA_REGISTRYINDEX, script->function_ref);
+#else
         lua_unref(lua, script->function_ref);
+#endif
     }
     ValkeyModule_Free(script);
 
@@ -480,14 +491,31 @@ static void luaEngineDebuggerEnd(ValkeyModuleCtx *module_ctx,
 
 static struct luaEngineCtx *engine_ctx = NULL;
 
+#ifdef LUA_5_4
+static const char *MODULE_NAME = "lua5.4";
+static const char *LUA_ENGINE_NAME = "LUA5.4";
+#else
+static const char *MODULE_NAME = "lua";
+static const char *LUA_ENGINE_NAME = "LUA";
+#endif
+
+static ValkeyModuleString *engine_name_string = NULL;
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
                         ValkeyModuleString **argv,
                         int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
 
-    if (ValkeyModule_Init(ctx, "lua", 1, VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR) {
+    if (ValkeyModule_Init(ctx, MODULE_NAME, 1, VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR) {
         return VALKEYMODULE_ERR;
+    }
+
+    const char *engine_name = LUA_ENGINE_NAME;
+    if (argc == 1) {
+        engine_name_string = argv[0];
+        ValkeyModule_RetainString(NULL, engine_name_string);
+        engine_name = ValkeyModule_StringPtrLen(argv[0], NULL);
     }
 
     ValkeyModule_SetModuleOptions(ctx, VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD |
@@ -517,7 +545,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
     };
 
     int result = ValkeyModule_RegisterScriptingEngine(ctx,
-                                                      LUA_ENGINE_NAME,
+                                                      engine_name,
                                                       engine_ctx,
                                                       &methods);
 
@@ -534,9 +562,19 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
 }
 
 int ValkeyModule_OnUnload(ValkeyModuleCtx *ctx) {
-    if (ValkeyModule_UnregisterScriptingEngine(ctx, LUA_ENGINE_NAME) != VALKEYMODULE_OK) {
+    const char *engine_name = LUA_ENGINE_NAME;
+    if (engine_name_string) {
+        engine_name = ValkeyModule_StringPtrLen(engine_name_string, NULL);
+    }
+
+    if (ValkeyModule_UnregisterScriptingEngine(ctx, engine_name) != VALKEYMODULE_OK) {
         ValkeyModule_Log(ctx, "error", "Failed to unregister engine");
         return VALKEYMODULE_ERR;
+    }
+
+    if (engine_name_string) {
+        ValkeyModule_FreeString(NULL, engine_name_string);
+        engine_name_string = NULL;
     }
 
     destroyEngineContext(engine_ctx);

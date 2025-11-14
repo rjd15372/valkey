@@ -125,12 +125,25 @@ ValkeyModuleScriptingEngineCompiledFunction **luaFunctionLibraryCreate(lua_State
     ValkeyModuleScriptingEngineCompiledFunction **compiled_functions = NULL;
 
     /* set load library globals */
+#ifdef LUA_5_4
+    lua_pushglobaltable(lua);
+    lua_getmetatable(lua, -1);
+    lua_enablereadonlytable(lua, -2, 0); /* disable global protection */
+#else
     lua_getmetatable(lua, LUA_GLOBALSINDEX);
     lua_enablereadonlytable(lua, -1, 0); /* disable global protection */
+#endif
     lua_getfield(lua, LUA_REGISTRYINDEX, LIBRARY_API_NAME);
     lua_setfield(lua, -2, "__index");
+
+#ifdef LUA_5_4
+    lua_pop(lua, 1);
+    lua_enablereadonlytable(lua, -1, 1); /* enable global protection */
+    lua_pop(lua, 1);
+#else
     lua_enablereadonlytable(lua, LUA_GLOBALSINDEX, 1); /* enable global protection */
     lua_pop(lua, 1);                                   /* pop the metatable */
+#endif
 
     /* compile the code */
     if (luaL_loadbuffer(lua, code, strlen(code), "@user_function")) {
@@ -183,12 +196,24 @@ ValkeyModuleScriptingEngineCompiledFunction **luaFunctionLibraryCreate(lua_State
 
 done:
     /* restore original globals */
+#ifdef LUA_5_4
+    lua_pushglobaltable(lua);
+    lua_getmetatable(lua, -1);
+    lua_enablereadonlytable(lua, -2, 0); /* disable global protection */
+#else
     lua_getmetatable(lua, LUA_GLOBALSINDEX);
     lua_enablereadonlytable(lua, -1, 0); /* disable global protection */
+#endif
     lua_getfield(lua, LUA_REGISTRYINDEX, GLOBALS_API_NAME);
     lua_setfield(lua, -2, "__index");
+#ifdef LUA_5_4
+    lua_pop(lua, 1);
+    lua_enablereadonlytable(lua, -1, 1); /* enable global protection */
+    lua_pop(lua, 1);
+#else
     lua_enablereadonlytable(lua, LUA_GLOBALSINDEX, 1); /* enable global protection */
     lua_pop(lua, 1);                                   /* pop the metatable */
+#endif
 
     lua_sethook(lua, NULL, 0, 0); /* Disable hook */
     luaSaveOnRegistry(lua, REGISTRY_LOAD_CTX_NAME, NULL);
@@ -361,7 +386,11 @@ error:
     if (name) ValkeyModule_FreeString(NULL, name);
     if (desc) ValkeyModule_FreeString(NULL, desc);
     if (script) {
+#ifdef LUA_5_4
+        luaL_unref(lua, LUA_REGISTRYINDEX, script->function_ref);
+#else
         lua_unref(lua, script->function_ref);
+#endif
         ValkeyModule_Free(script);
     }
     luaPushError(lua, err);
@@ -459,25 +488,44 @@ void luaFunctionInitializeLuaState(luaEngineCtx *ctx, lua_State *lua) {
     lua_setfield(lua, LUA_REGISTRYINDEX, LIBRARY_API_NAME);
 
     /* Save default globals to registry */
+#ifdef LUA_5_4
+    lua_pushglobaltable(lua);
+#else
     lua_pushvalue(lua, LUA_GLOBALSINDEX);
+#endif
     lua_setfield(lua, LUA_REGISTRYINDEX, GLOBALS_API_NAME);
 
     /* Create new empty table to be the new globals, we will be able to control the real globals
      * using metatable */
     lua_newtable(lua); /* new globals */
     lua_newtable(lua); /* new globals metatable */
+#ifdef LUA_5_4
+    lua_pushglobaltable(lua);
+#else
     lua_pushvalue(lua, LUA_GLOBALSINDEX);
+#endif
     lua_setfield(lua, -2, "__index");
     lua_enablereadonlytable(lua, -1, 1); /* protect the metatable */
     lua_setmetatable(lua, -2);
     lua_enablereadonlytable(lua, -1, 1); /* protect the new global table */
+#ifdef LUA_5_4
+    /* In Lua 5.4, we need to set the new table as the global environment */
+    lua_pushvalue(lua, -1);  /* duplicate the new global table */
+    lua_rawseti(lua, LUA_REGISTRYINDEX, LUA_RIDX_GLOBALS);  /* set it as the global table */
+    lua_pop(lua, 1);  /* pop the original new global table */
+#else
     lua_replace(lua, LUA_GLOBALSINDEX);  /* set new global table as the new globals */
+#endif
     /* Set metatables of basic types (string, number, nil etc.) readonly. */
     luaSetTableProtectionForBasicTypes(lua);
 }
 
 void luaFunctionFreeFunction(lua_State *lua, void *function) {
     luaFunction *script = function;
+#ifdef LUA_5_4
+    luaL_unref(lua, LUA_REGISTRYINDEX, script->function_ref);
+#else
     lua_unref(lua, script->function_ref);
+#endif
     ValkeyModule_Free(function);
 }

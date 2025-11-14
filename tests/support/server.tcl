@@ -148,7 +148,7 @@ proc ping_server {host port} {
     set retval 0
     if {[catch {
         if {$::tls} {
-            set fd [::tls::socket $host $port] 
+            set fd [::tls::socket $host $port]
         } else {
             set fd [socket $host $port]
         }
@@ -443,7 +443,7 @@ proc run_external_server_test {code overrides} {
     }
 
     set srv [lpop ::servers]
-    
+
     if {[dict exists $srv "client"]} {
         [dict get $srv "client"] close
     }
@@ -555,6 +555,10 @@ proc start_server {options {code undefined}} {
         dict set config "io-threads" 2
         dict set config "events-per-io-thread" 0
         dict set config "min-io-threads-avoid-copy-reply" 2
+    }
+
+    if {$::lua_5_4} {
+        dict set config "lua-5.4-default" "yes"
     }
 
     foreach line $data {

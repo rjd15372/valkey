@@ -1268,6 +1268,7 @@ start_server {tags {"introspection"}} {
             rdma-rx-size
             rdma-bind
             rdma-port
+            lua-5.4-default
         }
 
         if {!$::tls} {

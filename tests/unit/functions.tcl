@@ -759,7 +759,7 @@ start_server {tags {"scripting"}} {
         }
         catch {r fcall f1 0} e
         set _ $e
-    } {*attempt to call field 'register_function' (a nil value)*}
+    } {*attempt to call *'register_function'*}
 
     test {LIBRARIES - register library with no functions} {
         r function flush

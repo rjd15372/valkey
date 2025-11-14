@@ -2301,6 +2301,7 @@ struct valkeyServer {
     int script_disable_deny_script; /* Allow running commands marked "noscript" inside a script. */
     int lua_enable_insecure_api;    /* Config to enable insecure api */
     int lua_insecure_api_current;   /* Current value of if insecure apis are enabled, used to determine if flush is needed. */
+    int lua_54_default;             /* Use Lua 5.4 as the default Lua scripting engine. */
     /* Lazy free */
     int lazyfree_lazy_eviction;
     int lazyfree_lazy_expire;

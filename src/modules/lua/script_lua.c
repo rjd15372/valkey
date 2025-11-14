@@ -112,6 +112,7 @@ static char *lua_builtins_allow_list[] = {
     "gcinfo",
     "pairs",
     "rawget",
+    "rawlen",
     "loadstring",
     "ipairs",
     "_VERSION",
@@ -158,6 +159,7 @@ static char *deny_list[] = {
     "dofile",
     "loadfile",
     "print",
+    "warn",
     NULL,
 };
 
@@ -559,7 +561,11 @@ char *strmapchars(char *s, const char *from, const char *to, size_t setlen) {
 
 char *copy_string_from_lua_stack(lua_State *lua) {
     const char *str = lua_tostring(lua, -1);
+#ifdef LUA_5_4
+    size_t len = lua_rawlen(lua, -1);
+#else
     size_t len = lua_strlen(lua, -1);
+#endif
     char *res = ValkeyModule_Alloc(len + 1);
     strncpy(res, str, len);
     res[len] = 0;
@@ -583,7 +589,11 @@ static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_St
 
     switch (t) {
     case LUA_TSTRING:
+#ifdef LUA_5_4
+        ValkeyModule_ReplyWithStringBuffer(ctx, lua_tostring(lua, -1), lua_rawlen(lua, -1));
+#else
         ValkeyModule_ReplyWithStringBuffer(ctx, lua_tostring(lua, -1), lua_strlen(lua, -1));
+#endif
         break;
     case LUA_TBOOLEAN:
         if (resp_version == 2) {
@@ -1391,9 +1401,14 @@ static int luaSetResp(lua_State *lua) {
  * ------------------------------------------------------------------------- */
 
 static void luaLoadLib(lua_State *lua, const char *libname, lua_CFunction luafunc) {
+#ifdef LUA_5_4
+    luaL_requiref(lua, libname, luafunc, 1);
+    lua_pop(lua, 1);
+#else
     lua_pushcfunction(lua, luafunc);
     lua_pushstring(lua, libname);
     lua_call(lua, 1, 0);
+#endif
 }
 
 LUALIB_API int(luaopen_cjson)(lua_State *L);
@@ -1402,12 +1417,19 @@ LUALIB_API int(luaopen_cmsgpack)(lua_State *L);
 LUALIB_API int(luaopen_bit)(lua_State *L);
 
 static void luaLoadLibraries(lua_State *lua) {
+#ifdef LUA_5_4
+    luaLoadLib(lua, LUA_GNAME, luaopen_base);
+#else
     luaLoadLib(lua, "", luaopen_base);
+#endif
     luaLoadLib(lua, LUA_TABLIBNAME, luaopen_table);
     luaLoadLib(lua, LUA_STRLIBNAME, luaopen_string);
     luaLoadLib(lua, LUA_MATHLIBNAME, luaopen_math);
     luaLoadLib(lua, LUA_DBLIBNAME, luaopen_debug);
     luaLoadLib(lua, LUA_OSLIBNAME, luaopen_os);
+#ifdef LUA_5_4
+    luaLoadLib(lua, LUA_COLIBNAME, luaopen_coroutine);
+#endif
     luaLoadLib(lua, "cjson", luaopen_cjson);
     luaLoadLib(lua, "struct", luaopen_struct);
     luaLoadLib(lua, "cmsgpack", luaopen_cmsgpack);
@@ -1586,7 +1608,11 @@ void luaSetTableProtectionForBasicTypes(lua_State *lua) {
 void luaRegisterVersion(luaEngineCtx *ctx, lua_State *lua) {
     /* For legacy compatibility reasons include Redis versions. */
     lua_pushstring(lua, "REDIS_VERSION_NUM");
+#ifdef LUA_5_4
+    lua_pushinteger(lua, ctx->redis_version_num);
+#else
     lua_pushnumber(lua, ctx->redis_version_num);
+#endif
     lua_settable(lua, -3);
 
     lua_pushstring(lua, "REDIS_VERSION");
@@ -1595,7 +1621,11 @@ void luaRegisterVersion(luaEngineCtx *ctx, lua_State *lua) {
 
     /* Now push the Valkey version information. */
     lua_pushstring(lua, "VALKEY_VERSION_NUM");
+#ifdef LUA_5_4
+    lua_pushinteger(lua, ctx->valkey_version_num);
+#else
     lua_pushnumber(lua, ctx->valkey_version_num);
+#endif
     lua_settable(lua, -3);
 
     lua_pushstring(lua, "VALKEY_VERSION");
@@ -1637,14 +1667,19 @@ void luaRegisterLogFunction(lua_State *lua) {
  */
 void luaRegisterServerAPI(luaEngineCtx *ctx, lua_State *lua) {
     /* In addition to registering server.call/pcall API, we will throw a custom message when a script accesses
-     * undefined global variable. LUA stores global variables in the global table, accessible to us on stack at virtual
-     * index = LUA_GLOBALSINDEX. We will set __index handler in global table's metatable to a custom C function to
-     * achieve this - handled by luaSetAllowListProtection. Refer to https://www.lua.org/pil/13.4.1.html for
-     * documentation on __index and https://www.lua.org/pil/contents.html#13 for documentation on metatables. We need to
-     * pass global table to lua invocations as parameters. To achieve this, lua_pushvalue invocation brings global
-     * variable table to the top of the stack by pushing value from global index onto the stack. And lua_pop invocation
+     * undefined global variable. LUA stores global variables in the global table. In Lua 5.1, this is accessible
+     * at virtual index LUA_GLOBALSINDEX, while in Lua 5.4+ we use lua_pushglobaltable(). We will set __index handler
+     * in global table's metatable to a custom C function to achieve this - handled by luaSetAllowListProtection.
+     * Refer to https://www.lua.org/pil/13.4.1.html for documentation on __index and
+     * https://www.lua.org/pil/contents.html#13 for documentation on metatables. We need to pass global table to lua
+     * invocations as parameters. To achieve this, we push the global table to the top of the stack (using
+     * lua_pushvalue with LUA_GLOBALSINDEX in Lua 5.1 or lua_pushglobaltable in Lua 5.4+). The lua_pop invocation
      * after luaSetAllowListProtection removes it - resetting the stack to its original state. */
+#ifdef LUA_5_4
+    lua_pushglobaltable(lua);
+#else
     lua_pushvalue(lua, LUA_GLOBALSINDEX);
+#endif
     luaSetAllowListProtection(lua);
     lua_pop(lua, 1);
 
@@ -1785,14 +1820,23 @@ static int server_math_random(lua_State *L) {
         break;
     }
     case 1: { /* only upper limit */
+#ifdef LUA_5_4
+        int u = luaL_checkinteger(L, 1);
+#else
         int u = luaL_checkint(L, 1);
+#endif
         luaL_argcheck(L, 1 <= u, 1, "interval is empty");
         lua_pushnumber(L, floor(r * u) + 1); /* int between 1 and `u' */
         break;
     }
     case 2: { /* lower and upper limits */
+#ifdef LUA_5_4
+        int l = luaL_checkinteger(L, 1);
+        int u = luaL_checkinteger(L, 2);
+#else
         int l = luaL_checkint(L, 1);
         int u = luaL_checkint(L, 2);
+#endif
         luaL_argcheck(L, l <= u, 2, "interval is empty");
         lua_pushnumber(L, floor(r * (u - l + 1)) + l); /* int between `l' and `u' */
         break;
@@ -1803,7 +1847,11 @@ static int server_math_random(lua_State *L) {
 }
 
 static int server_math_randomseed(lua_State *L) {
+#ifdef LUA_5_4
+    serverSrand48(luaL_checkinteger(L, 1));
+#else
     serverSrand48(luaL_checkint(L, 1));
+#endif
     return 0;
 }
 
@@ -1973,16 +2021,42 @@ void luaCallFunction(ValkeyModuleCtx *ctx,
     /* On eval, keys and arguments are globals. */
     if (type == VMSE_EVAL) {
         /* open global protection to set KEYS */
+#ifdef LUA_5_4
+        lua_pushglobaltable(lua);
+        lua_enablereadonlytable(lua, -1, 0);
+        lua_pop(lua, 1);
+#else
         lua_enablereadonlytable(lua, LUA_GLOBALSINDEX, 0);
+#endif
+
         lua_setglobal(lua, "KEYS");
+
+#ifdef LUA_5_4
+        lua_pushglobaltable(lua);
+        lua_enablereadonlytable(lua, -1, 1);
+        lua_pop(lua, 1);
+#else
         lua_enablereadonlytable(lua, LUA_GLOBALSINDEX, 1);
+#endif
     }
     luaCreateArray(lua, args, nargs);
     if (type == VMSE_EVAL) {
         /* open global protection to set ARGV */
+#ifdef LUA_5_4
+        lua_pushglobaltable(lua);
+        lua_enablereadonlytable(lua, -1, 0);
+        lua_pop(lua, 1);
+#else
         lua_enablereadonlytable(lua, LUA_GLOBALSINDEX, 0);
+#endif
         lua_setglobal(lua, "ARGV");
+#ifdef LUA_5_4
+        lua_pushglobaltable(lua);
+        lua_enablereadonlytable(lua, -1, 1);
+        lua_pop(lua, 1);
+#else
         lua_enablereadonlytable(lua, LUA_GLOBALSINDEX, 1);
+#endif
     }
 
     /* At this point whether this script was never seen before or if it was

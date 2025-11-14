@@ -628,6 +628,7 @@ Table *luaH_new (lua_State *L) {
   Table *t = gco2t(o);
   t->metatable = NULL;
   t->flags = cast_byte(maskflags);  /* table has no metamethod fields */
+  t->readonly = 0;  /* table is not readonly by default */
   t->array = NULL;
   t->alimit = 0;
   setnodevector(L, t, 0);

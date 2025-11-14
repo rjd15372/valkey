@@ -337,6 +337,8 @@ void luaV_finishset (lua_State *L, const TValue *t, TValue *key,
     if (slot != NULL) {  /* is 't' a table? */
       Table *h = hvalue(t);  /* save 't' table */
       lua_assert(isempty(slot));  /* slot must be empty */
+      if (h->readonly)
+        luaG_runerror(L, "Attempt to modify a readonly table");
       tm = fasttm(L, h->metatable, TM_NEWINDEX);  /* get metamethod */
       if (tm == NULL) {  /* no metamethod? */
         sethvalue2s(L, L->top.p, h);  /* anchor 't' */
@@ -1312,6 +1314,9 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
         TValue *rc = RKC(i);
         TString *key = tsvalue(rb);  /* key must be a short string */
         if (luaV_fastget(L, upval, key, slot, luaH_getshortstr)) {
+          Table *h = hvalue(upval);
+          if (h->readonly)
+            luaG_runerror(L, "Attempt to modify a readonly table");
           luaV_finishfastset(L, upval, slot, rc);
         }
         else
@@ -1327,6 +1332,9 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
         if (ttisinteger(rb)  /* fast track for integers? */
             ? (cast_void(n = ivalue(rb)), luaV_fastgeti(L, s2v(ra), n, slot))
             : luaV_fastget(L, s2v(ra), rb, slot, luaH_get)) {
+          Table *h = hvalue(s2v(ra));
+          if (h->readonly)
+            luaG_runerror(L, "Attempt to modify a readonly table");
           luaV_finishfastset(L, s2v(ra), slot, rc);
         }
         else
@@ -1339,6 +1347,9 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
         int c = GETARG_B(i);
         TValue *rc = RKC(i);
         if (luaV_fastgeti(L, s2v(ra), c, slot)) {
+          Table *h = hvalue(s2v(ra));
+          if (h->readonly)
+            luaG_runerror(L, "Attempt to modify a readonly table");
           luaV_finishfastset(L, s2v(ra), slot, rc);
         }
         else {
@@ -1355,6 +1366,9 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
         TValue *rc = RKC(i);
         TString *key = tsvalue(rb);  /* key must be a short string */
         if (luaV_fastget(L, s2v(ra), key, slot, luaH_getshortstr)) {
+          Table *h = hvalue(s2v(ra));
+          if (h->readonly)
+            luaG_runerror(L, "Attempt to modify a readonly table");
           luaV_finishfastset(L, s2v(ra), slot, rc);
         }
         else

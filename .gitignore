@@ -29,6 +29,9 @@ src/*.conf
 deps/lua/src/lua
 deps/lua/src/luac
 deps/lua/src/liblua.a
+deps/lua-5.4.8/src/lua
+deps/lua-5.4.8/src/luac
+deps/lua-5.4.8/src/liblua.a
 deps/hdr_histogram/libhdrhistogram.a
 deps/fpconv/libfpconv.a
 tests/tls/*

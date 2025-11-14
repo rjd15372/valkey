@@ -6909,8 +6909,8 @@ void dismissMemoryInChild(void) {
     /* madvise(MADV_DONTNEED) may not work if Transparent Huge Pages is enabled. */
     if (server.thp_enabled) return;
 
-        /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
-         * so we avoid these pointless loops when they're not going to do anything. */
+    /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
+     * so we avoid these pointless loops when they're not going to do anything. */
 #if defined(USE_JEMALLOC) && defined(__linux__)
     listIter li;
     listNode *ln;
@@ -7432,9 +7432,27 @@ __attribute__((weak)) int main(int argc, char **argv) {
     /* Initialize the LUA scripting engine. */
 #ifdef LUA_ENABLED
 #define LUA_LIB_STR STRINGIFY(LUA_LIB)
+#define LUA_54_LIB_STR STRINGIFY(LUA_54_LIB)
     if (scriptingEngineManagerFind("lua") == NULL) {
-        if (moduleLoad(LUA_LIB_STR, NULL, 0, 0) != C_OK) {
+        const char *lua_lib_path = LUA_LIB_STR;
+        robj **argv = NULL;
+        int argc = 0;
+
+        if (server.lua_54_default) {
+            serverLog(LL_NOTICE, "Using Lua 5.4 as the default scripting engine.");
+            lua_lib_path = LUA_54_LIB_STR;
+            argv = zmalloc(sizeof(robj *));
+            argv[0] = createStringObject("LUA", strlen("LUA"));
+            argc = 1;
+        }
+
+        if (moduleLoad(lua_lib_path, (void **)argv, argc, 0) != C_OK) {
             serverPanic("Lua engine initialization failed, check the server logs.");
+        }
+
+        if (server.lua_54_default) {
+            decrRefCount(argv[0]);
+            zfree(argv);
         }
     }
 #endif

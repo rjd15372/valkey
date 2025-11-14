@@ -794,8 +794,15 @@
 ** without modifying the main part of the file.
 */
 
-
-
+/*
+@@ LUAI_MAXCSTACK limits the number of Lua stack slots that a C function
+@* can use.
+** CHANGE it if you need lots of (Lua) stack space for your C
+** functions. This limit is arbitrary; its only purpose is to stop C
+** functions to consume unlimited stack space. (must be smaller than
+** -LUA_REGISTRYINDEX)
+*/
+#define LUAI_MAXCSTACK	9000
 
 
 #endif

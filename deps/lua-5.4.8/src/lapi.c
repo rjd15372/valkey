@@ -114,12 +114,16 @@ LUA_API int lua_checkstack (lua_State *L, int n) {
   lua_lock(L);
   ci = L->ci;
   api_check(L, n >= 0, "negative 'n'");
-  if (L->stack_last.p - L->top.p > n)  /* stack large enough? */
-    res = 1;  /* yes; check is OK */
-  else  /* need to grow stack */
-    res = luaD_growstack(L, n, 0);
-  if (res && ci->top.p < L->top.p + n)
-    ci->top.p = L->top.p + n;  /* adjust frame top */
+  if (n > LUAI_MAXCSTACK || (L->top.p - L->stack.p + n) > LUAI_MAXCSTACK)
+    res = 0;  /* stack overflow */
+  else {
+    if (L->stack_last.p - L->top.p > n)  /* stack large enough? */
+      res = 1;  /* yes; check is OK */
+    else  /* need to grow stack */
+      res = luaD_growstack(L, n, 0);
+    if (res && ci->top.p < L->top.p + n)
+      ci->top.p = L->top.p + n;  /* adjust frame top */
+  }
   lua_unlock(L);
   return res;
 }
@@ -898,6 +902,8 @@ static void aux_rawset (lua_State *L, int idx, TValue *key, int n) {
   lua_lock(L);
   api_checknelems(L, n);
   t = gettable(L, idx);
+  if (t->readonly)
+    luaG_runerror(L, "Attempt to modify a readonly table");
   luaH_set(L, t, key, s2v(L->top.p - 1));
   invalidateTMcache(t);
   luaC_barrierback(L, obj2gco(t), s2v(L->top.p - 1));
@@ -923,6 +929,8 @@ LUA_API void lua_rawseti (lua_State *L, int idx, lua_Integer n) {
   lua_lock(L);
   api_checknelems(L, 1);
   t = gettable(L, idx);
+  if (t->readonly)
+    luaG_runerror(L, "Attempt to modify a readonly table");
   luaH_setint(L, t, n, s2v(L->top.p - 1));
   luaC_barrierback(L, obj2gco(t), s2v(L->top.p - 1));
   L->top.p--;
@@ -944,6 +952,8 @@ LUA_API int lua_setmetatable (lua_State *L, int objindex) {
   }
   switch (ttype(obj)) {
     case LUA_TTABLE: {
+      if (hvalue(obj)->readonly)
+        luaG_runerror(L, "Attempt to modify a readonly table");
       hvalue(obj)->metatable = mt;
       if (mt) {
         luaC_objbarrier(L, gcvalue(obj), mt);
@@ -967,6 +977,32 @@ LUA_API int lua_setmetatable (lua_State *L, int objindex) {
   L->top.p--;
   lua_unlock(L);
   return 1;
+}
+
+
+LUA_API void lua_enablereadonlytable (lua_State *L, int objindex, int enabled) {
+  TValue *o;
+  lua_lock(L);
+  o = index2value(L, objindex);
+  api_check(L, ttistable(o), "table expected");
+  Table *t = hvalue(o);
+  api_check(L, t != hvalue(&G(L)->l_registry), "cannot modify registry table");
+  t->readonly = enabled;
+  lua_unlock(L);
+}
+
+
+LUA_API int lua_isreadonlytable (lua_State *L, int objindex) {
+  TValue *o;
+  int result;
+  lua_lock(L);
+  o = index2value(L, objindex);
+  api_check(L, ttistable(o), "table expected");
+  Table *t = hvalue(o);
+  api_check(L, t != hvalue(&G(L)->l_registry), "cannot access registry table");
+  result = t->readonly;
+  lua_unlock(L);
+  return result;
 }
 
 
