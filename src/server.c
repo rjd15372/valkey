@@ -89,6 +89,10 @@
 #define GNUC_VERSION_STR "0.0.0"
 #endif
 
+#ifdef LUA_STATICLIB
+extern int luaLoadModule(void *ctx, void **argv, int argc);
+#endif
+
 /* Our shared "common" objects */
 
 struct sharedObjectsStruct shared;
@@ -7462,12 +7466,20 @@ __attribute__((weak)) int main(int argc, char **argv) {
 
     /* Initialize the LUA scripting engine. */
 #ifdef LUA_ENABLED
+#if defined(LUA_LIB)
 #define LUA_LIB_STR STRINGIFY(LUA_LIB)
     if (scriptingEngineManagerFind("lua") == NULL) {
         if (moduleLoad(LUA_LIB_STR, NULL, 0, 0) != C_OK) {
             serverPanic("Lua engine initialization failed, check the server logs.");
         }
     }
+#endif
+
+#ifdef LUA_STATICLIB
+    if (moduleStaticLoad("lua", &luaLoadModule, NULL, 0) != C_OK) {
+        serverPanic("Lua engine initialization failed, check the server logs.");
+    }
+#endif
 #endif
 
 

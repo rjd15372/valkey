@@ -480,9 +480,7 @@ static void luaEngineDebuggerEnd(ValkeyModuleCtx *module_ctx,
 
 static struct luaEngineCtx *engine_ctx = NULL;
 
-int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
-                        ValkeyModuleString **argv,
-                        int argc) {
+int luaLoadModule(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
 
@@ -531,6 +529,12 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
     engine_ctx->lua_enable_insecure_api = isLuaInsecureAPIEnabled(ctx);
 
     return VALKEYMODULE_OK;
+}
+
+int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
+                        ValkeyModuleString **argv,
+                        int argc) {
+    return luaLoadModule(ctx, argv, argc);
 }
 
 int ValkeyModule_OnUnload(ValkeyModuleCtx *ctx) {

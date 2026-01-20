@@ -43,7 +43,6 @@
 #include <math.h>
 #include <stdio.h>
 #include <errno.h>
-#include <time.h>
 
 #define LUA_CMD_OBJCACHE_SIZE 32
 #define LUA_CMD_OBJCACHE_MAX_LEN 64
@@ -170,9 +169,9 @@ static void _serverPanic(const char *file, int line, const char *msg, ...) {
 
 #define serverPanic(...) _serverPanic(__FILE__, __LINE__, __VA_ARGS__)
 
-typedef uint64_t monotime;
+#ifndef LUA_STATICLIB
 
-monotime getMonotonicUs(void) {
+monotime lua_getMonotonicUs(void) {
     /* clock_gettime() is specified in POSIX.1b (1993).  Even so, some systems
      * did not support this until much later.  CLOCK_MONOTONIC is technically
      * optional and may not be supported - but it appears to be universal.
@@ -182,12 +181,20 @@ monotime getMonotonicUs(void) {
     return ((uint64_t)ts.tv_sec) * 1000000 + ts.tv_nsec / 1000;
 }
 
-inline uint64_t elapsedUs(monotime start_time) {
-    return getMonotonicUs() - start_time;
+#else
+
+monotime lua_getMonotonicUs(void) {
+    return getMonotonicUs();
 }
 
-inline uint64_t elapsedMs(monotime start_time) {
-    return elapsedUs(start_time) / 1000;
+#endif
+
+uint64_t lua_elapsedUs(monotime start_time) {
+    return lua_getMonotonicUs() - start_time;
+}
+
+uint64_t lua_elapsedMs(monotime start_time) {
+    return lua_elapsedUs(start_time) / 1000;
 }
 
 static int server_math_random(lua_State *L);
@@ -1156,6 +1163,12 @@ static int luaRedisPCallCommand(lua_State *lua) {
     return luaServerGenericCommand(lua, 0);
 }
 
+#ifdef LUA_STATICLIB
+
+extern void sha1hex(char *digest, char *script, size_t len);
+
+#else
+
 /* Perform the SHA1 of the input string. We use this both for hashing script
  * bodies in order to obtain the Lua function name, and in the implementation
  * of server.sha1().
@@ -1178,6 +1191,8 @@ void sha1hex(char *digest, char *script, size_t len) {
     }
     digest[40] = '\0';
 }
+
+#endif /* LUA_STATICLIB */
 
 /* This adds server.sha1hex(string) to Lua scripts using the same hashing
  * function used for sha1ing lua scripts. */

@@ -45,33 +45,12 @@
 
 #include <string.h>
 #include <strings.h>
-#include <time.h>
 #include <lauxlib.h>
 #include <lualib.h>
 
 #define REGISTRY_LOAD_CTX_NAME "__LIBRARY_CTX__"
 #define LIBRARY_API_NAME "__LIBRARY_API__"
 #define GLOBALS_API_NAME "__GLOBALS_API__"
-
-typedef uint64_t monotime;
-
-static monotime getMonotonicUs(void) {
-    /* clock_gettime() is specified in POSIX.1b (1993).  Even so, some systems
-     * did not support this until much later.  CLOCK_MONOTONIC is technically
-     * optional and may not be supported - but it appears to be universal.
-     * If this is not supported, provide a system-specific alternate version.  */
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ((uint64_t)ts.tv_sec) * 1000000 + ts.tv_nsec / 1000;
-}
-
-static inline uint64_t elapsedUs(monotime start_time) {
-    return getMonotonicUs() - start_time;
-}
-
-static inline uint64_t elapsedMs(monotime start_time) {
-    return elapsedUs(start_time) / 1000;
-}
 
 typedef struct loadCtx {
     List *functions;
@@ -87,7 +66,7 @@ static void luaEngineLoadHook(lua_State *lua, lua_Debug *ar) {
     VALKEYMODULE_NOT_USED(ar);
     loadCtx *load_ctx = luaGetFromRegistry(lua, REGISTRY_LOAD_CTX_NAME);
     ValkeyModule_Assert(load_ctx); /* Only supported inside script invocation */
-    uint64_t duration = elapsedMs(load_ctx->start_time);
+    uint64_t duration = lua_elapsedMs(load_ctx->start_time);
     if (load_ctx->timeout > 0 && duration > load_ctx->timeout) {
         lua_sethook(lua, luaEngineLoadHook, LUA_MASKLINE, 0);
 
@@ -142,7 +121,7 @@ ValkeyModuleScriptingEngineCompiledFunction **luaFunctionLibraryCreate(lua_State
 
     loadCtx load_ctx = {
         .functions = list_create(),
-        .start_time = getMonotonicUs(),
+        .start_time = lua_getMonotonicUs(),
         .timeout = timeout,
     };
     luaSaveOnRegistry(lua, REGISTRY_LOAD_CTX_NAME, &load_ctx);
@@ -213,7 +192,7 @@ typedef struct flagStr {
     const char *str;
 } flagStr;
 
-flagStr scripts_flags_def[] = {
+static flagStr scripts_flags_def[] = {
     {.flag = VMSE_SCRIPT_FLAG_NO_WRITES, .str = "no-writes"},
     {.flag = VMSE_SCRIPT_FLAG_ALLOW_OOM, .str = "allow-oom"},
     {.flag = VMSE_SCRIPT_FLAG_ALLOW_STALE, .str = "allow-stale"},

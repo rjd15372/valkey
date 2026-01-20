@@ -12776,6 +12776,86 @@ void moduleUnregisterCleanup(ValkeyModule *module) {
     moduleUnregisterAuthCBs(module);
 }
 
+static int moduleLoadHelper(const char *name,
+                            void *handle,
+                            moduleOnLoadFunc onload,
+                            void **module_argv,
+                            int module_argc,
+                            int is_loadex) {
+    ValkeyModuleCtx ctx;
+    moduleCreateContext(&ctx, NULL, VALKEYMODULE_CTX_TEMP_CLIENT); /* We pass NULL since we don't have a module yet. */
+    if (onload((void *)&ctx, module_argv, module_argc) == VALKEYMODULE_ERR) {
+        if (ctx.module) {
+            serverLog(LL_WARNING, "Module %s initialization failed. Module not loaded.", name);
+            moduleUnregisterCleanup(ctx.module);
+            moduleRemoveCateogires(ctx.module);
+            moduleFreeModuleStructure(ctx.module);
+        } else {
+            /* If there is no ctx.module, this means that our ValkeyModule_Init call failed,
+             * and currently init will only fail on busy name. */
+            serverLog(LL_WARNING, "Module %s initialization failed. Module name is busy.", name);
+        }
+        moduleFreeContext(&ctx);
+        dlclose(handle);
+        return C_ERR;
+    }
+
+    /* Module loaded! Register it. */
+    dictAdd(modules, ctx.module->name, ctx.module);
+    ctx.module->blocked_clients = 0;
+    ctx.module->handle = handle;
+    ctx.module->loadmod = zmalloc(sizeof(struct moduleLoadQueueEntry));
+    ctx.module->loadmod->path = sdsnew(name);
+    ctx.module->loadmod->argv = module_argc ? zmalloc(sizeof(robj *) * module_argc) : NULL;
+    ctx.module->loadmod->argc = module_argc;
+    for (int i = 0; i < module_argc; i++) {
+        ctx.module->loadmod->argv[i] = module_argv[i];
+        incrRefCount(ctx.module->loadmod->argv[i]);
+    }
+
+    /* If module commands have ACL categories, recompute command bits
+     * for all existing users once the modules has been registered. */
+    if (ctx.module->num_commands_with_acl_categories) {
+        ACLRecomputeCommandBitsFromCommandRulesAllUsers();
+    }
+
+    if (handle) {
+        serverLog(LL_NOTICE, "Module '%s' loaded from %s", ctx.module->name, name);
+    } else {
+        serverLog(LL_NOTICE, "Static module '%s' loaded", ctx.module->name);
+    }
+    ctx.module->onload = 0;
+
+    int post_load_err = 0;
+    if (listLength(ctx.module->module_configs) && !ctx.module->configs_initialized) {
+        serverLogRaw(LL_WARNING,
+                     "Module Configurations were not set, likely a missing LoadConfigs call. Unloading the module.");
+        post_load_err = 1;
+    }
+
+    if (is_loadex && dictSize(server.module_configs_queue)) {
+        serverLogRaw(LL_WARNING,
+                     "Loadex configurations were not applied, likely due to invalid arguments. Unloading the module.");
+        post_load_err = 1;
+    }
+
+    if (post_load_err) {
+        moduleUnload(ctx.module->name, NULL);
+        moduleFreeContext(&ctx);
+        return C_ERR;
+    }
+
+    /* Fire the loaded modules event. */
+    moduleFireServerEvent(VALKEYMODULE_EVENT_MODULE_CHANGE, VALKEYMODULE_SUBEVENT_MODULE_LOADED, ctx.module);
+
+    moduleFreeContext(&ctx);
+    return C_OK;
+}
+
+int moduleStaticLoad(const char *name, moduleOnLoadFunc onload, void **module_argv, int module_argc) {
+    return moduleLoadHelper(name, NULL, onload, module_argv, module_argc, 0);
+}
+
 /* Load a module and initialize it. On success C_OK is returned, otherwise
  * C_ERR is returned. */
 int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loadex) {
@@ -12827,69 +12907,8 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
                   path);
         return C_ERR;
     }
-    ValkeyModuleCtx ctx;
-    moduleCreateContext(&ctx, NULL, VALKEYMODULE_CTX_TEMP_CLIENT); /* We pass NULL since we don't have a module yet. */
-    if (onload((void *)&ctx, module_argv, module_argc) == VALKEYMODULE_ERR) {
-        if (ctx.module) {
-            serverLog(LL_WARNING, "Module %s initialization failed. Module not loaded.", path);
-            moduleUnregisterCleanup(ctx.module);
-            moduleRemoveCateogires(ctx.module);
-            moduleFreeModuleStructure(ctx.module);
-        } else {
-            /* If there is no ctx.module, this means that our ValkeyModule_Init call failed,
-             * and currently init will only fail on busy name. */
-            serverLog(LL_WARNING, "Module %s initialization failed. Module name is busy.", path);
-        }
-        moduleFreeContext(&ctx);
-        dlclose(handle);
-        return C_ERR;
-    }
 
-    /* Module loaded! Register it. */
-    dictAdd(modules, ctx.module->name, ctx.module);
-    ctx.module->blocked_clients = 0;
-    ctx.module->handle = handle;
-    ctx.module->loadmod = zmalloc(sizeof(struct moduleLoadQueueEntry));
-    ctx.module->loadmod->path = sdsnew(path);
-    ctx.module->loadmod->argv = module_argc ? zmalloc(sizeof(robj *) * module_argc) : NULL;
-    ctx.module->loadmod->argc = module_argc;
-    for (int i = 0; i < module_argc; i++) {
-        ctx.module->loadmod->argv[i] = module_argv[i];
-        incrRefCount(ctx.module->loadmod->argv[i]);
-    }
-
-    /* If module commands have ACL categories, recompute command bits
-     * for all existing users once the modules has been registered. */
-    if (ctx.module->num_commands_with_acl_categories) {
-        ACLRecomputeCommandBitsFromCommandRulesAllUsers();
-    }
-    serverLog(LL_NOTICE, "Module '%s' loaded from %s", ctx.module->name, path);
-    ctx.module->onload = 0;
-
-    int post_load_err = 0;
-    if (listLength(ctx.module->module_configs) && !ctx.module->configs_initialized) {
-        serverLogRaw(LL_WARNING,
-                     "Module Configurations were not set, likely a missing LoadConfigs call. Unloading the module.");
-        post_load_err = 1;
-    }
-
-    if (is_loadex && dictSize(server.module_configs_queue)) {
-        serverLogRaw(LL_WARNING,
-                     "Loadex configurations were not applied, likely due to invalid arguments. Unloading the module.");
-        post_load_err = 1;
-    }
-
-    if (post_load_err) {
-        moduleUnload(ctx.module->name, NULL);
-        moduleFreeContext(&ctx);
-        return C_ERR;
-    }
-
-    /* Fire the loaded modules event. */
-    moduleFireServerEvent(VALKEYMODULE_EVENT_MODULE_CHANGE, VALKEYMODULE_SUBEVENT_MODULE_LOADED, ctx.module);
-
-    moduleFreeContext(&ctx);
-    return C_OK;
+    return moduleLoadHelper(path, handle, onload, module_argv, module_argc, is_loadex);
 }
 
 static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg) {
@@ -12940,7 +12959,7 @@ static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg
     moduleUnregisterCleanup(module);
 
     /* Unload the dynamic library. */
-    if (dlclose(module->handle) == -1) {
+    if (module->handle && dlclose(module->handle) == -1) {
         char *error = dlerror();
         if (error == NULL) error = "Unknown error";
         serverLog(LL_WARNING, "Error when trying to close the %s module: %s", module->name, error);
@@ -12968,6 +12987,11 @@ int moduleUnload(sds name, const char **errmsg) {
 
     if (module == NULL) {
         *errmsg = "no such module with that name";
+        return C_ERR;
+    }
+
+    if (module->handle == NULL) {
+        *errmsg = "cannot unload static module";
         return C_ERR;
     }
 

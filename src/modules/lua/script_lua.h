@@ -53,6 +53,24 @@
 #define C_OK 0
 #define C_ERR -1
 
+typedef uint64_t monotime;
+
+#ifdef LUA_STATICLIB
+
+extern monotime (*getMonotonicUs)(void);
+monotime lua_getMonotonicUs(void);
+
+#else
+
+#include <time.h>
+
+monotime lua_getMonotonicUs(void);
+
+#endif
+
+uint64_t lua_elapsedUs(monotime start_time);
+uint64_t lua_elapsedMs(monotime start_time);
+
 typedef struct lua_State lua_State;
 
 #define REGISTRY_RUN_CTX_NAME "__RUN_CTX__"

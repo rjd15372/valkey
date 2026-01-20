@@ -253,25 +253,6 @@ endif
 # Include paths to dependencies
 FINAL_CFLAGS+= -I../deps/libvalkey/include -I../deps/linenoise -I../deps/hdr_histogram -I../deps/fpconv
 
-# Lua scripting engine module
-LUA_MODULE_NAME:=modules/lua/libvalkeylua.so
-ifeq ($(BUILD_LUA),no)
-	LUA_MODULE=
-	LUA_MODULE_INSTALL=
-else
-	LUA_MODULE=$(LUA_MODULE_NAME)
-	LUA_MODULE_INSTALL=install-lua-module
-
-	current_dir = $(shell pwd)
-	FINAL_CFLAGS+=-DLUA_ENABLED -DLUA_LIB=libvalkeylua.so
-ifeq ($(uname_S),Darwin)
-	FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib
-	FINAL_LDFLAGS+= -Wl,-rpath,$(current_dir)/modules/lua
-else
-	FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib:$(current_dir)/modules/lua -Wl,--disable-new-dtags
-endif
-endif
-
 # Determine systemd support and/or build preference (defaulting to auto-detection)
 BUILD_WITH_SYSTEMD=no
 LIBSYSTEMD_LIBS=-lsystemd
@@ -457,6 +438,37 @@ ENGINE_TEST_OBJ:=$(sort $(patsubst unit/%.c,unit/%.o,$(ENGINE_TEST_FILES)))
 ENGINE_UNIT_TESTS:=$(ENGINE_NAME)-unit-tests$(PROG_SUFFIX)
 ALL_SOURCES=$(sort $(patsubst %.o,%.c,$(ENGINE_SERVER_OBJ) $(ENGINE_CLI_OBJ) $(ENGINE_BENCHMARK_OBJ)))
 
+# Lua scripting engine module
+ifeq ($(BUILD_LUA),no)
+	LUA_MODULE_NAME=
+	LUA_MODULE_INSTALL=
+	LUA_BUILD_DEPENDS_ON=
+else ifeq ($(BUILD_LUA),module)
+	LUA_MODULE_NAME:=libvalkeylua.so
+	LUA_MODULE_PATH=modules/lua/$(LUA_MODULE_NAME)
+	LUA_MODULE_INSTALL=install-lua-module
+	LUA_STATICLIB_CFLAGS=
+	LUA_BUILD_DEPENDS_ON=$(SERVER_NAME)
+
+	current_dir = $(shell pwd)
+	FINAL_CFLAGS+= -DLUA_ENABLED -DLUA_LIB=$(LUA_MODULE_NAME)
+	ifeq ($(uname_S),Darwin)
+		FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib
+		FINAL_LDFLAGS+= -Wl,-rpath,$(current_dir)/modules/lua
+	else
+		FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib:$(current_dir)/modules/lua -Wl,--disable-new-dtags
+	endif
+else
+    LUA_MODULE_NAME=libvalkeylua.a
+	LUA_MODULE_PATH=modules/lua/$(LUA_MODULE_NAME)
+	LUA_MODULE_INSTALL=
+	LUA_BUILD_DEPENDS_ON=
+	LUA_STATICLIB_CFLAGS=-DLUA_STATICLIB
+	FINAL_CFLAGS+= -DLUA_ENABLED -DLUA_STATICLIB
+	FINAL_LIBS+= modules/lua/libvalkeylua.a
+endif
+
+
 USE_FAST_FLOAT?=no
 ifeq ($(USE_FAST_FLOAT),yes)
 	# valkey_strtod.h uses this flag to switch valkey_strtod function to fast_float_strtod,
@@ -468,7 +480,7 @@ ifeq ($(USE_FAST_FLOAT),yes)
 	FINAL_LIBS += $(FAST_FLOAT_STRTOD_OBJECT)
 endif
 
-all: $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(TLS_MODULE) $(RDMA_MODULE) $(LUA_MODULE)
+all: $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(TLS_MODULE) $(RDMA_MODULE)
 	@echo ""
 	@echo "Hint: It's a good idea to run 'make test' ;)"
 	@echo ""
@@ -520,8 +532,8 @@ ifneq ($(strip $(PREV_FINAL_LDFLAGS)), $(strip $(FINAL_LDFLAGS)))
 endif
 
 # valkey-server
-$(SERVER_NAME): $(ENGINE_SERVER_OBJ)
-	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
+$(SERVER_NAME): $(ENGINE_SERVER_OBJ) $(LUA_MODULE_PATH)
+	$(SERVER_LD) -o $@ $(ENGINE_SERVER_OBJ) ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
 
 # Valkey static library, used to compile against for unit testing
 $(ENGINE_LIB_NAME): $(ENGINE_SERVER_OBJ)
@@ -552,8 +564,8 @@ $(RDMA_MODULE_NAME): $(SERVER_NAME)
 	$(QUIET_CC)$(CC) -o $@ rdma.c -shared -fPIC $(RDMA_MODULE_CFLAGS)
 
 # engine_lua.so
-$(LUA_MODULE_NAME): $(SERVER_NAME)
-	cd modules/lua && $(MAKE) OPTIMIZATION="$(OPTIMIZATION)"
+$(LUA_MODULE_PATH): $(LUA_BUILD_DEPENDS_ON)
+	cd modules/lua && $(MAKE) OPTIMIZATION="$(OPTIMIZATION)" $(LUA_MODULE_NAME) CFLAGS="$(LUA_STATICLIB_CFLAGS)"
 
 # valkey-cli
 $(ENGINE_CLI_NAME): $(ENGINE_CLI_OBJ)

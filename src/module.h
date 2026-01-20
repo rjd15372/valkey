@@ -235,4 +235,7 @@ void freeClientModuleData(client *c);
 int checkModuleAuthentication(client *c, robj *username, robj *password, robj **err);
 void moduleFireAuthenticationEvent(uint64_t client_id, const char *username, const char *module_name, int is_granted);
 
+typedef int (*moduleOnLoadFunc)(void *, void **, int);
+int moduleStaticLoad(const char *name, moduleOnLoadFunc onload, void **module_argv, int module_argc);
+
 #endif /* _MODULE_H_ */
