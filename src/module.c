@@ -56,6 +56,7 @@
  * function names. For details, see the script src/modules/gendoc.rb.
  * -------------------------------------------------------------------------- */
 
+#include "sds.h"
 #include "server.h"
 #include "cluster.h"
 #include "commandlog.h"
@@ -2999,6 +3000,33 @@ const char *VM_StringPtrLen(const ValkeyModuleString *str, size_t *len) {
     }
     if (len) *len = sdslen(objectGetVal(str));
     return objectGetVal(str);
+}
+
+
+/* Given a string module object, this function replaces the string stored in
+ * the string buffer by the `new_str` string. If the string fits in the string
+ * buffer, no allocation is performed, otherwise the string buffer is reallocated. */
+int VM_StringReplace(ValkeyModuleString *str, const char *new_str, size_t new_len) {
+    if (str->refcount != 1) {
+        return VALKEYMODULE_ERR;
+    }
+
+    sds ptr = objectGetVal(str);
+    size_t capacity = sdslen(ptr);
+
+    if (new_len > capacity) {
+        if (str->encoding == OBJ_ENCODING_EMBSTR) {
+            objectUnembedVal(str);
+            ptr = objectGetVal(str);
+        }
+        ptr = sdsMakeRoomForNonGreedy(ptr, new_len - capacity);
+        objectSetVal(str, ptr);
+    }
+
+    memcpy(ptr, new_str, new_len);
+    ((char *)ptr)[new_len] = '\0';
+    sdssetlen(ptr, new_len);
+    return VALKEYMODULE_OK;
 }
 
 /* --------------------------------------------------------------------------
@@ -14504,6 +14532,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(CreateStringPrintf);
     REGISTER_API(FreeString);
     REGISTER_API(StringPtrLen);
+    REGISTER_API(StringReplace);
     REGISTER_API(AutoMemory);
     REGISTER_API(Replicate);
     REGISTER_API(ReplicateVerbatim);

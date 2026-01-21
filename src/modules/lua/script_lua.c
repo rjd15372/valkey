@@ -44,6 +44,7 @@
 #include <stdio.h>
 #include <errno.h>
 
+/* Cache of recently used small arguments to avoid malloc calls. */
 #define LUA_CMD_OBJCACHE_SIZE 32
 #define LUA_CMD_OBJCACHE_MAX_LEN 64
 
@@ -901,12 +902,10 @@ static int double2ll(double d, long long *out) {
     return 0;
 }
 
-#define ARGV_CACHE_SIZE 8
-
 struct CallArgvCache {
     ValkeyModuleString **argv;
     int argc;
-    ValkeyModuleString *cache[ARGV_CACHE_SIZE];
+    ValkeyModuleString *cache[LUA_CMD_OBJCACHE_SIZE];
     int cache_size;
 };
 
@@ -921,41 +920,26 @@ static ValkeyModuleString **getCallArgvArray(int argc) {
     return argv_cache.argv;
 }
 
-static ValkeyModuleString *getCallArgvCacheItem(int index, const char *obj_s, size_t obj_len) {
-    if (index < argv_cache.cache_size) {
+static ValkeyModuleString *getCallArgvCacheItem(int index, const char *str, size_t len) {
+    if (len < LUA_CMD_OBJCACHE_MAX_LEN && index < argv_cache.cache_size) {
         ValkeyModuleString *item = argv_cache.cache[index];
-        size_t item_len = 0;
-        const char *item_s = ValkeyModule_StringPtrLen(item, &item_len);
-
-        if (obj_len <= item_len) {
-            memcpy((void *)item_s, (const void *)obj_s, obj_len);
-            ((char *)item_s)[obj_len] = '\0';
+        if (ValkeyModule_StringReplace(item, str, len) == VALKEYMODULE_OK) {
             argv_cache.cache[index] = NULL; /* remove from cache */
             return item;
         }
     }
 
-    return ValkeyModule_CreateString(NULL, obj_s, obj_len);
+    return ValkeyModule_CreateString(NULL, str, len);
 }
 
 static void returnCallArgvCacheItem(int index, ValkeyModuleString *item) {
     if (index < argv_cache.cache_size) {
-        if (argv_cache.cache[index]) {
-            size_t item_len = 0;
-            ValkeyModule_StringPtrLen(item, &item_len);
-
-            size_t cache_item_len = 0;
-            ValkeyModule_StringPtrLen(argv_cache.cache[index], &cache_item_len);
-
-            if (item_len <= cache_item_len) {
-                ValkeyModule_FreeString(NULL, item);
-                return;
-            } else {
-                ValkeyModule_FreeString(NULL, argv_cache.cache[index]);
-            }
+        if (argv_cache.cache[index] != NULL) {
+            ValkeyModule_FreeString(NULL, item);
+        } else {
+            argv_cache.cache[index] = item;
         }
-        argv_cache.cache[index] = item;
-    } else if (index < ARGV_CACHE_SIZE) {
+    } else if (index < LUA_CMD_OBJCACHE_SIZE) {
         ValkeyModule_Assert(argv_cache.cache[index] == NULL);
         argv_cache.cache[argv_cache.cache_size++] = item;
     } else {
@@ -963,7 +947,7 @@ static void returnCallArgvCacheItem(int index, ValkeyModuleString *item) {
     }
 }
 
-static ValkeyModuleString **luaArgsToServerArgv(ValkeyModuleCtx *ctx, lua_State *lua, int *argc) {
+static ValkeyModuleString **luaArgsToServerArgv(lua_State *lua, int *argc) {
     int j;
     /* Require at least one argument */
     *argc = lua_gettop(lua);
@@ -1077,7 +1061,7 @@ static int luaServerGenericCommand(lua_State *lua, int raise_error) {
     ValkeyModuleCallReply *reply;
 
     int argc = 0;
-    ValkeyModuleString **argv = luaArgsToServerArgv(rctx->module_ctx, lua, &argc);
+    ValkeyModuleString **argv = luaArgsToServerArgv(lua, &argc);
     if (argv == NULL) {
         return raise_error ? luaError(lua) : 1;
     }
@@ -1354,7 +1338,7 @@ static int luaRedisAclCheckCmdPermissionsCommand(lua_State *lua) {
     int raise_error = 0;
 
     int argc = 0;
-    ValkeyModuleString **argv = luaArgsToServerArgv(rctx->module_ctx, lua, &argc);
+    ValkeyModuleString **argv = luaArgsToServerArgv(lua, &argc);
 
     /* Require at least one argument */
     if (argv == NULL) return luaError(lua);
