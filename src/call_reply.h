@@ -35,7 +35,7 @@
 typedef struct CallReply CallReply;
 typedef void (*ValkeyModuleOnUnblocked)(void *ctx, CallReply *reply, void *private_data);
 
-CallReply *callReplyCreate(sds reply, list *deferred_error_list, void *private_data);
+CallReply *callReplyCreate(sds reply, size_t reply_len, list *deferred_error_list, void *private_data, int owns_proto);
 CallReply *callReplyCreateError(sds reply, void *private_data);
 int callReplyType(CallReply *rep);
 const char *callReplyGetString(CallReply *rep, size_t *len);

@@ -921,16 +921,31 @@ void moduleFreeContext(ValkeyModuleCtx *ctx) {
 }
 
 static CallReply *moduleParseReply(client *c, ValkeyModuleCtx *ctx) {
-    /* Convert the result of the command into a module reply. */
-    sds proto = sdsnewlen(c->buf, c->bufpos);
-    c->bufpos = 0;
-    while (listLength(c->reply)) {
-        clientReplyBlock *o = listNodeValue(listFirst(c->reply));
 
-        proto = sdscatlen(proto, o->buf, o->used);
-        listDelNode(c->reply, listFirst(c->reply));
+    sds proto;
+    size_t proto_len;
+    int owns_proto = 0;
+
+    if (listLength(c->reply) == 0 && (size_t)c->bufpos < c->buf_usable_size) {
+        /* This is a fast path for the common case of a reply inside the
+         * client static buffer. Don't create an SDS string but just use
+         * the client buffer directly. */
+        c->buf[c->bufpos] = '\0';
+        proto = c->buf;
+        proto_len = c->bufpos;
+    } else {
+        /* Convert the result of the command into a module reply. */
+        proto = sdsnewlen(c->buf, c->bufpos);
+        c->bufpos = 0;
+        while (listLength(c->reply)) {
+            clientReplyBlock *o = listNodeValue(listFirst(c->reply));
+            proto = sdscatlen(proto, o->buf, o->used);
+            listDelNode(c->reply, listFirst(c->reply));
+        }
+        proto_len = sdslen(proto);
+        owns_proto = 1;
     }
-    CallReply *reply = callReplyCreate(proto, c->deferred_reply_errors, ctx);
+    CallReply *reply = callReplyCreate(proto, proto_len, c->deferred_reply_errors, ctx, owns_proto);
     c->deferred_reply_errors = NULL; /* now the responsibility of the reply object. */
     return reply;
 }

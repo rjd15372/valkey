@@ -28,6 +28,7 @@
  */
 
 #include "server.h"
+#include "zmalloc.h"
 #include "call_reply.h"
 
 #define REPLY_FLAG_ROOT (1 << 0)
@@ -43,6 +44,7 @@
 struct CallReply {
     void *private_data;
     sds original_proto; /* Available only for root reply. */
+    int owns_proto;    /* Whether we own the original_proto and should free it. */
     const char *proto;
     size_t proto_len;
     int type;   /* REPLY_... */
@@ -254,7 +256,9 @@ void freeCallReply(CallReply *rep) {
         }
         freeCallReplyInternal(rep);
     }
-    sdsfree(rep->original_proto);
+    if (rep->owns_proto) {
+        sdsfree(rep->original_proto);
+    }
     if (rep->deferred_error_list) listRelease(rep->deferred_error_list);
     zfree(rep);
 }
@@ -542,12 +546,13 @@ list *callReplyDeferredErrorList(CallReply *rep) {
  * DESIGNED TO HANDLE USER INPUT and using it to parse invalid replies is
  * unsafe.
  */
-CallReply *callReplyCreate(sds reply, list *deferred_error_list, void *private_data) {
+CallReply *callReplyCreate(sds reply, size_t reply_len, list *deferred_error_list, void *private_data, int owns_proto) {
     CallReply *res = zmalloc(sizeof(*res));
     res->flags = REPLY_FLAG_ROOT;
     res->original_proto = reply;
+    res->owns_proto = owns_proto;
     res->proto = reply;
-    res->proto_len = sdslen(reply);
+    res->proto_len = reply_len;
     res->private_data = private_data;
     res->attribute = NULL;
     res->deferred_error_list = deferred_error_list;
@@ -569,7 +574,7 @@ CallReply *callReplyCreateError(sds reply, void *private_data) {
     list *deferred_error_list = listCreate();
     listSetFreeMethod(deferred_error_list, sdsfreeVoid);
     listAddNodeTail(deferred_error_list, sdsnew(err_buff));
-    return callReplyCreate(err_buff, deferred_error_list, private_data);
+    return callReplyCreate(err_buff, sdslen(err_buff), deferred_error_list, private_data, 1);
 }
 
 /* Enable exact reply type parsing to preserve type distinctions.
