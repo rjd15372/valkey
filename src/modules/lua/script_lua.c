@@ -764,7 +764,7 @@ static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_St
 /* ---------------------------------------------------------------------------
  * Lua server.* functions implementations.
  * ------------------------------------------------------------------------- */
-void freeLuaServerArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc);
+static void freeLuaServerArgv(ValkeyModuleString **argv, int argc);
 
 /* Return the number of digits of 'v' when converted to string in radix 10.
  * See ll2string() for more information. */
@@ -901,6 +901,68 @@ static int double2ll(double d, long long *out) {
     return 0;
 }
 
+#define ARGV_CACHE_SIZE 8
+
+struct CallArgvCache {
+    ValkeyModuleString **argv;
+    int argc;
+    ValkeyModuleString *cache[ARGV_CACHE_SIZE];
+    int cache_size;
+};
+
+struct CallArgvCache argv_cache = {NULL, 0, {NULL}, 0};
+
+static ValkeyModuleString **getCallArgvArray(int argc) {
+    if (argc > argv_cache.argc) {
+        argv_cache.argv = ValkeyModule_Realloc(argv_cache.argv, sizeof(ValkeyModuleString *) * argc);
+        argv_cache.argc = argc;
+    }
+
+    return argv_cache.argv;
+}
+
+static ValkeyModuleString *getCallArgvCacheItem(int index, const char *obj_s, size_t obj_len) {
+    if (index < argv_cache.cache_size) {
+        ValkeyModuleString *item = argv_cache.cache[index];
+        size_t item_len = 0;
+        const char *item_s = ValkeyModule_StringPtrLen(item, &item_len);
+
+        if (obj_len <= item_len) {
+            memcpy((void *)item_s, (const void *)obj_s, obj_len);
+            ((char *)item_s)[obj_len] = '\0';
+            argv_cache.cache[index] = NULL; /* remove from cache */
+            return item;
+        }
+    }
+
+    return ValkeyModule_CreateString(NULL, obj_s, obj_len);
+}
+
+static void returnCallArgvCacheItem(int index, ValkeyModuleString *item) {
+    if (index < argv_cache.cache_size) {
+        if (argv_cache.cache[index]) {
+            size_t item_len = 0;
+            ValkeyModule_StringPtrLen(item, &item_len);
+
+            size_t cache_item_len = 0;
+            ValkeyModule_StringPtrLen(argv_cache.cache[index], &cache_item_len);
+
+            if (item_len <= cache_item_len) {
+                ValkeyModule_FreeString(NULL, item);
+                return;
+            } else {
+                ValkeyModule_FreeString(NULL, argv_cache.cache[index]);
+            }
+        }
+        argv_cache.cache[index] = item;
+    } else if (index < ARGV_CACHE_SIZE) {
+        ValkeyModule_Assert(argv_cache.cache[index] == NULL);
+        argv_cache.cache[argv_cache.cache_size++] = item;
+    } else {
+        ValkeyModule_FreeString(NULL, item);
+    }
+}
+
 static ValkeyModuleString **luaArgsToServerArgv(ValkeyModuleCtx *ctx, lua_State *lua, int *argc) {
     int j;
     /* Require at least one argument */
@@ -910,7 +972,7 @@ static ValkeyModuleString **luaArgsToServerArgv(ValkeyModuleCtx *ctx, lua_State 
         return NULL;
     }
 
-    ValkeyModuleString **lua_argv = ValkeyModule_Alloc(sizeof(ValkeyModuleString *) * *argc);
+    ValkeyModuleString **lua_argv = getCallArgvArray(*argc);
 
     for (j = 0; j < *argc; j++) {
         char *obj_s;
@@ -938,7 +1000,7 @@ static ValkeyModuleString **luaArgsToServerArgv(ValkeyModuleCtx *ctx, lua_State 
             if (obj_s == NULL) break; /* Not a string. */
         }
 
-        lua_argv[j] = ValkeyModule_CreateString(ctx, obj_s, obj_len);
+        lua_argv[j] = getCallArgvCacheItem(j, obj_s, obj_len);
     }
 
     /* Pop all arguments from the stack, we do not need them anymore
@@ -949,7 +1011,7 @@ static ValkeyModuleString **luaArgsToServerArgv(ValkeyModuleCtx *ctx, lua_State 
      * is not a string or an integer (lua_isstring() return true for
      * integers as well). */
     if (j != *argc) {
-        freeLuaServerArgv(ctx, lua_argv, j);
+        freeLuaServerArgv(lua_argv, j);
         luaPushError(lua, "ERR Command arguments must be strings or integers");
         return NULL;
     }
@@ -957,13 +1019,11 @@ static ValkeyModuleString **luaArgsToServerArgv(ValkeyModuleCtx *ctx, lua_State 
     return lua_argv;
 }
 
-void freeLuaServerArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+static void freeLuaServerArgv(ValkeyModuleString **argv, int argc) {
     int j;
     for (j = 0; j < argc; j++) {
-        ValkeyModuleString *o = argv[j];
-        ValkeyModule_FreeString(ctx, o);
+        returnCallArgvCacheItem(j, argv[j]);
     }
-    ValkeyModule_Free(argv);
 }
 
 static void luaProcessReplyError(ValkeyModuleCallReply *reply, lua_State *lua) {
@@ -1088,7 +1148,7 @@ static int luaServerGenericCommand(lua_State *lua, int raise_error) {
 
     errno = 0;
     reply = ValkeyModule_Call(rctx->module_ctx, cmdname, fmt, argv + 1, argc - 1);
-    freeLuaServerArgv(rctx->module_ctx, argv, argc);
+    freeLuaServerArgv(argv, argc);
     int reply_type = ValkeyModule_CallReplyType(reply);
     if (errno != 0) {
         ValkeyModule_Assert(reply_type == VALKEYMODULE_REPLY_ERROR);
@@ -1317,7 +1377,7 @@ static int luaRedisAclCheckCmdPermissionsCommand(lua_State *lua) {
     }
 
     ValkeyModule_FreeModuleUser(user);
-    freeLuaServerArgv(rctx->module_ctx, argv, argc);
+    freeLuaServerArgv(argv, argc);
     if (raise_error)
         return luaError(lua);
     else
