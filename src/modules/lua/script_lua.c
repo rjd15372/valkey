@@ -906,10 +906,9 @@ struct CallArgvCache {
     ValkeyModuleString **argv;
     int argc;
     ValkeyModuleString *cache[LUA_CMD_OBJCACHE_SIZE];
-    int cache_size;
 };
 
-struct CallArgvCache argv_cache = {NULL, 0, {NULL}, 0};
+struct CallArgvCache argv_cache = {NULL, 0, {NULL}};
 
 static ValkeyModuleString **getCallArgvArray(int argc) {
     if (argc > argv_cache.argc) {
@@ -921,7 +920,7 @@ static ValkeyModuleString **getCallArgvArray(int argc) {
 }
 
 static ValkeyModuleString *getCallArgvCacheItem(int index, const char *str, size_t len) {
-    if (len < LUA_CMD_OBJCACHE_MAX_LEN && index < argv_cache.cache_size) {
+    if (index < LUA_CMD_OBJCACHE_SIZE && argv_cache.cache[index] != NULL) {
         ValkeyModuleString *item = argv_cache.cache[index];
         if (ValkeyModule_StringReplace(item, str, len) == VALKEYMODULE_OK) {
             argv_cache.cache[index] = NULL; /* remove from cache */
@@ -933,18 +932,19 @@ static ValkeyModuleString *getCallArgvCacheItem(int index, const char *str, size
 }
 
 static void returnCallArgvCacheItem(int index, ValkeyModuleString *item) {
-    if (index < argv_cache.cache_size) {
-        if (argv_cache.cache[index] != NULL) {
-            ValkeyModule_FreeString(NULL, item);
-        } else {
+    if (index < LUA_CMD_OBJCACHE_SIZE && ValkeyModule_StringIsSingleOwner(item)) {
+        size_t len = 0;
+        ValkeyModule_StringPtrLen(item, &len);
+        if (len <= LUA_CMD_OBJCACHE_MAX_LEN) {
+            if (argv_cache.cache[index] != NULL) {
+                ValkeyModule_FreeString(NULL, argv_cache.cache[index]);
+            }
             argv_cache.cache[index] = item;
+            return;
         }
-    } else if (index < LUA_CMD_OBJCACHE_SIZE) {
-        ValkeyModule_Assert(argv_cache.cache[index] == NULL);
-        argv_cache.cache[argv_cache.cache_size++] = item;
-    } else {
-        ValkeyModule_FreeString(NULL, item);
     }
+
+    ValkeyModule_FreeString(NULL, item);
 }
 
 static ValkeyModuleString **luaArgsToServerArgv(lua_State *lua, int *argc) {
@@ -1004,8 +1004,7 @@ static ValkeyModuleString **luaArgsToServerArgv(lua_State *lua, int *argc) {
 }
 
 static void freeLuaServerArgv(ValkeyModuleString **argv, int argc) {
-    int j;
-    for (j = 0; j < argc; j++) {
+    for (int j = 0; j < argc; j++) {
         returnCallArgvCacheItem(j, argv[j]);
     }
 }
@@ -1103,35 +1102,28 @@ static int luaServerGenericCommand(lua_State *lua, int raise_error) {
         ValkeyModule_Free(cmdlog);
     }
 
-    char fmt[13] = "v!EMSX";
-    int fmt_idx = 6; /* Index of the last char in fmt[] */
-
-    ValkeyModuleString *username = ValkeyModule_GetCurrentUserName(rctx->module_ctx);
-    if (username != NULL) {
-        fmt[fmt_idx++] = 'C';
-        ValkeyModule_FreeString(rctx->module_ctx, username);
-    }
+    int flags = VALKEYMODULE_ARGV_SCRIPT_MODE |
+                VALKEYMODULE_ARGV_REPLICATE |
+                VALKEYMODULE_ARGV_CALL_REPLIES_AS_ERRORS |
+                VALKEYMODULE_ARGV_RESPECT_DENY_OOM |
+                VALKEYMODULE_ARGV_CALL_REPLY_EXACT;
 
     if (!(rctx->replication_flags & PROPAGATE_AOF)) {
-        fmt[fmt_idx++] = 'A';
+        flags |= VALKEYMODULE_ARGV_NO_AOF;
     }
     if (!(rctx->replication_flags & PROPAGATE_REPL)) {
-        fmt[fmt_idx++] = 'R';
+        flags |= VALKEYMODULE_ARGV_NO_REPLICAS;
     }
     if (!rctx->replication_flags) {
         /* PROPAGATE_NONE case */
-        fmt[fmt_idx++] = 'A';
-        fmt[fmt_idx++] = 'R';
+        flags |= VALKEYMODULE_ARGV_NO_AOF | VALKEYMODULE_ARGV_NO_REPLICAS;
     }
     if (rctx->resp == 3) {
-        fmt[fmt_idx++] = '3';
+        flags |= VALKEYMODULE_ARGV_RESP_3;
     }
-    fmt[fmt_idx] = '\0';
-
-    const char *cmdname = ValkeyModule_StringPtrLen(argv[0], NULL);
 
     errno = 0;
-    reply = ValkeyModule_Call(rctx->module_ctx, cmdname, fmt, argv + 1, argc - 1);
+    reply = ValkeyModule_CallArgv(rctx->module_ctx, argv, argc, flags);
     freeLuaServerArgv(argv, argc);
     int reply_type = ValkeyModule_CallReplyType(reply);
     if (errno != 0) {

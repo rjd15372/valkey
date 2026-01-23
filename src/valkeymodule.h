@@ -862,6 +862,21 @@ typedef void (*ValkeyModuleInfoFunc)(ValkeyModuleInfoCtx *ctx, int for_crash_rep
 typedef void (*ValkeyModuleDefragFunc)(ValkeyModuleDefragCtx *ctx);
 typedef void (*ValkeyModuleUserChangedFunc)(uint64_t client_id, void *privdata);
 
+/* Flags for moduleCreateArgvFromUserFormat(). */
+#define VALKEYMODULE_ARGV_REPLICATE (1 << 0)
+#define VALKEYMODULE_ARGV_NO_AOF (1 << 1)
+#define VALKEYMODULE_ARGV_NO_REPLICAS (1 << 2)
+#define VALKEYMODULE_ARGV_RESP_3 (1 << 3)
+#define VALKEYMODULE_ARGV_RESP_AUTO (1 << 4)
+#define VALKEYMODULE_ARGV_RUN_AS_USER (1 << 5)
+#define VALKEYMODULE_ARGV_SCRIPT_MODE (1 << 6)
+#define VALKEYMODULE_ARGV_NO_WRITES (1 << 7)
+#define VALKEYMODULE_ARGV_CALL_REPLIES_AS_ERRORS (1 << 8)
+#define VALKEYMODULE_ARGV_RESPECT_DENY_OOM (1 << 9)
+#define VALKEYMODULE_ARGV_DRY_RUN (1 << 10)
+#define VALKEYMODULE_ARGV_ALLOW_BLOCK (1 << 11)
+#define VALKEYMODULE_ARGV_CALL_REPLY_EXACT (1 << 12)
+
 /* Type definitions for implementing scripting engines modules. */
 typedef void ValkeyModuleScriptingEngineCtx;
 typedef void ValkeyModuleScriptingEngineServerRuntimeCtx;
@@ -1492,6 +1507,10 @@ VALKEYMODULE_API ValkeyModuleCallReply *(*ValkeyModule_Call)(ValkeyModuleCtx *ct
                                                              const char *cmdname,
                                                              const char *fmt,
                                                              ...)VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleCallReply *(*ValkeyModule_CallArgv)(ValkeyModuleCtx *ctx,
+                                                                 ValkeyModuleString **argv,
+                                                                 int argc,
+                                                                 int flags)VALKEYMODULE_ATTR;
 VALKEYMODULE_API const char *(*ValkeyModule_CallReplyProto)(ValkeyModuleCallReply *reply, size_t *len)VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_FreeCallReply)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_CallReplyType)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
@@ -1542,8 +1561,9 @@ VALKEYMODULE_API ValkeyModuleString *(
 VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_CreateStringPrintf)(ValkeyModuleCtx *ctx, const char *fmt, ...)
     VALKEYMODULE_ATTR_PRINTF(2, 3) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_FreeString)(ValkeyModuleCtx *ctx, ValkeyModuleString *str) VALKEYMODULE_ATTR;
-VALKEYMODULE_API const char *(*ValkeyModule_StringPtrLen)(const ValkeyModuleString *str, size_t *len)VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*ValkeyModule_StringReplace)(ValkeyModuleString *str, const char *new_str, size_t new_len)VALKEYMODULE_ATTR;
+VALKEYMODULE_API const char *(*ValkeyModule_StringPtrLen)(const ValkeyModuleString *str, size_t *len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_StringIsSingleOwner)(const ValkeyModuleString *str) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_StringReplace)(ValkeyModuleString *str, const char *new_str, size_t new_len) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithError)(ValkeyModuleCtx *ctx, const char *err) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithErrorFormat)(ValkeyModuleCtx *ctx, const char *fmt, ...) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithCustomErrorFormat)(ValkeyModuleCtx *ctx, int update_error_stats, const char *fmt, ...) VALKEYMODULE_ATTR;
@@ -2257,6 +2277,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(StringToLongDouble);
     VALKEYMODULE_GET_API(StringToStreamID);
     VALKEYMODULE_GET_API(Call);
+    VALKEYMODULE_GET_API(CallArgv);
     VALKEYMODULE_GET_API(CallReplyProto);
     VALKEYMODULE_GET_API(FreeCallReply);
     VALKEYMODULE_GET_API(CallReplyInteger);
@@ -2285,6 +2306,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(CreateStringPrintf);
     VALKEYMODULE_GET_API(FreeString);
     VALKEYMODULE_GET_API(StringPtrLen);
+    VALKEYMODULE_GET_API(StringIsSingleOwner);
     VALKEYMODULE_GET_API(StringReplace);
     VALKEYMODULE_GET_API(AutoMemory);
     VALKEYMODULE_GET_API(Replicate);
