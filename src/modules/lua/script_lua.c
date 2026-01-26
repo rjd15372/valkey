@@ -1056,13 +1056,23 @@ static void luaProcessReplyError(ValkeyModuleCallReply *reply, lua_State *lua) {
 
 static ValkeyModuleCallReply *reply = NULL;
 
-static inline int callReplyType(char chr) {
-    switch (chr) {
+static inline int callReplyType(const char *proto) {
+    switch (proto[0]) {
     case '+': return VALKEYMODULE_REPLY_SIMPLE_STRING;
     case '-': return VALKEYMODULE_REPLY_ERROR;
     case ':': return VALKEYMODULE_REPLY_INTEGER;
-    case '$': return VALKEYMODULE_REPLY_STRING;
-    case '*': return VALKEYMODULE_REPLY_ARRAY;
+    case '$': {
+        if (proto[1] == '-') {
+            return VALKEYMODULE_REPLY_NULL;
+        }
+        return VALKEYMODULE_REPLY_STRING;
+    }
+    case '*': {
+        if (proto[1] == '-') {
+            return VALKEYMODULE_REPLY_ARRAY_NULL;
+        }
+        return VALKEYMODULE_REPLY_ARRAY;
+    }
     case '_': return VALKEYMODULE_REPLY_NULL;
     case '%': return VALKEYMODULE_REPLY_MAP;
     case '~': return VALKEYMODULE_REPLY_SET;
@@ -1151,7 +1161,7 @@ static int luaServerGenericCommand(lua_State *lua, int raise_error) {
     freeLuaServerArgv(argv, argc);
     size_t reply_len = 0;
     const char *proto = ValkeyModule_CallReplyProto(reply, &reply_len);
-    int reply_type = callReplyType(proto[0]);
+    int reply_type = callReplyType(proto);
     if (errno != 0) {
         ValkeyModule_Assert(reply_type == VALKEYMODULE_REPLY_ERROR);
 
