@@ -38,6 +38,7 @@
 #include <lua.h>
 #include <lauxlib.h>
 #include <lualib.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -1055,6 +1056,25 @@ static void luaProcessReplyError(ValkeyModuleCallReply *reply, lua_State *lua) {
 
 static ValkeyModuleCallReply *reply = NULL;
 
+static inline int callReplyType(char chr) {
+    switch (chr) {
+    case '+': return VALKEYMODULE_REPLY_SIMPLE_STRING;
+    case '-': return VALKEYMODULE_REPLY_ERROR;
+    case ':': return VALKEYMODULE_REPLY_INTEGER;
+    case '$': return VALKEYMODULE_REPLY_STRING;
+    case '*': return VALKEYMODULE_REPLY_ARRAY;
+    case '_': return VALKEYMODULE_REPLY_NULL;
+    case '%': return VALKEYMODULE_REPLY_MAP;
+    case '~': return VALKEYMODULE_REPLY_SET;
+    case '#': return VALKEYMODULE_REPLY_BOOL;
+    case ',': return VALKEYMODULE_REPLY_DOUBLE;
+    case '(': return VALKEYMODULE_REPLY_BIG_NUMBER;
+    case '=': return VALKEYMODULE_REPLY_VERBATIM_STRING;
+    case '|': return VALKEYMODULE_REPLY_ATTRIBUTE;
+    default: return VALKEYMODULE_REPLY_UNKNOWN;
+    }
+}
+
 static int luaServerGenericCommand(lua_State *lua, int raise_error) {
     luaFuncCallCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
     ValkeyModule_Assert(rctx); /* Only supported inside script invocation */
@@ -1129,7 +1149,9 @@ static int luaServerGenericCommand(lua_State *lua, int raise_error) {
     errno = 0;
     ValkeyModule_CallArgv(rctx->module_ctx, argv, argc, flags, reply);
     freeLuaServerArgv(argv, argc);
-    int reply_type = ValkeyModule_CallReplyType(reply);
+    size_t reply_len = 0;
+    const char *proto = ValkeyModule_CallReplyProto(reply, &reply_len);
+    int reply_type = callReplyType(proto[0]);
     if (errno != 0) {
         ValkeyModule_Assert(reply_type == VALKEYMODULE_REPLY_ERROR);
 
