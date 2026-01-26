@@ -347,8 +347,7 @@ int luaError(lua_State *lua) {
  * Server reply to Lua type conversion functions.
  * ------------------------------------------------------------------------- */
 
-static void callReplyToLuaType(lua_State *lua, ValkeyModuleCallReply *reply, int resp) {
-    int type = ValkeyModule_CallReplyType(reply);
+static void callReplyToLuaType(lua_State *lua, int type, ValkeyModuleCallReply *reply, int resp) {
     switch (type) {
     case VALKEYMODULE_REPLY_STRING: {
         if (!lua_checkstack(lua, 1)) {
@@ -398,7 +397,7 @@ static void callReplyToLuaType(lua_State *lua, ValkeyModuleCallReply *reply, int
             ValkeyModuleCallReply *val = ValkeyModule_CallReplyArrayElement(reply, i);
 
             lua_pushnumber(lua, i + 1);
-            callReplyToLuaType(lua, val, resp);
+            callReplyToLuaType(lua, ValkeyModule_CallReplyType(val), val, resp);
             lua_settable(lua, -3);
         }
         break;
@@ -433,8 +432,8 @@ static void callReplyToLuaType(lua_State *lua, ValkeyModuleCallReply *reply, int
             ValkeyModuleCallReply *val = NULL;
             ValkeyModule_CallReplyMapElement(reply, i, &key, &val);
 
-            callReplyToLuaType(lua, key, resp);
-            callReplyToLuaType(lua, val, resp);
+            callReplyToLuaType(lua, ValkeyModule_CallReplyType(key), key, resp);
+            callReplyToLuaType(lua, ValkeyModule_CallReplyType(val), val, resp);
             lua_settable(lua, -3);
         }
         lua_settable(lua, -3);
@@ -455,7 +454,7 @@ static void callReplyToLuaType(lua_State *lua, ValkeyModuleCallReply *reply, int
         for (size_t i = 0; i < items; i++) {
             ValkeyModuleCallReply *val = ValkeyModule_CallReplySetElement(reply, i);
 
-            callReplyToLuaType(lua, val, resp);
+            callReplyToLuaType(lua, ValkeyModule_CallReplyType(val), val, resp);
             lua_pushboolean(lua, 1);
             lua_settable(lua, -3);
         }
@@ -1054,10 +1053,15 @@ static void luaProcessReplyError(ValkeyModuleCallReply *reply, lua_State *lua) {
     lua_settable(lua, -3);
 }
 
+static ValkeyModuleCallReply *reply = NULL;
+
 static int luaServerGenericCommand(lua_State *lua, int raise_error) {
     luaFuncCallCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
     ValkeyModule_Assert(rctx); /* Only supported inside script invocation */
-    ValkeyModuleCallReply *reply;
+
+    if (reply == NULL) {
+        reply = ValkeyModule_AllocCallReply();
+    }
 
     int argc = 0;
     ValkeyModuleString **argv = luaArgsToServerArgv(lua, &argc);
@@ -1123,7 +1127,7 @@ static int luaServerGenericCommand(lua_State *lua, int raise_error) {
     }
 
     errno = 0;
-    reply = ValkeyModule_CallArgv(rctx->module_ctx, argv, argc, flags);
+    ValkeyModule_CallArgv(rctx->module_ctx, argv, argc, flags, reply);
     freeLuaServerArgv(argv, argc);
     int reply_type = ValkeyModule_CallReplyType(reply);
     if (errno != 0) {
@@ -1138,7 +1142,7 @@ static int luaServerGenericCommand(lua_State *lua, int raise_error) {
         raise_error = 0;
     }
 
-    callReplyToLuaType(lua, reply, rctx->resp);
+    callReplyToLuaType(lua, reply_type, reply, rctx->resp);
 
     /* If the debugger is active, log the reply from the server. */
     if (ldbIsEnabled()) {
@@ -1148,7 +1152,7 @@ static int luaServerGenericCommand(lua_State *lua, int raise_error) {
 cleanup:
     /* Clean up. Command code may have changed argv/argc so we use the
      * argv/argc of the client instead of the local variables. */
-    ValkeyModule_FreeCallReply(reply);
+    ValkeyModule_ResetCallReply(reply);
 
     inuse--;
 

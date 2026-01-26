@@ -36,7 +36,9 @@ typedef struct CallReply CallReply;
 typedef void (*ValkeyModuleOnUnblocked)(void *ctx, CallReply *reply, void *private_data);
 
 CallReply *callReplyCreate(sds reply, size_t reply_len, list *deferred_error_list, void *private_data, int owns_proto);
+void callReplyInit(CallReply *call_reply, sds reply, size_t reply_len, list *deferred_error_list, void *private_data, int owns_proto);
 CallReply *callReplyCreateError(sds reply, void *private_data);
+void callReplyCreateErrorInPlace(CallReply *call_reply, sds reply, void *private_data);
 int callReplyType(CallReply *rep);
 const char *callReplyGetString(CallReply *rep, size_t *len);
 long long callReplyGetLongLong(CallReply *rep);
@@ -55,6 +57,7 @@ void *callReplyGetPrivateData(CallReply *rep);
 int callReplyIsResp3(CallReply *rep);
 list *callReplyDeferredErrorList(CallReply *rep);
 void freeCallReply(CallReply *rep);
+void resetCallReply(CallReply *rep);
 CallReply *callReplyCreatePromise(void *private_data);
 void enableParseExactReplyTypeFlag(CallReply *rep);
 

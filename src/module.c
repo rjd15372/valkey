@@ -920,6 +920,35 @@ void moduleFreeContext(ValkeyModuleCtx *ctx) {
         ctx->client = NULL; /* Do not free the client, it was assigned manually. */
 }
 
+static void moduleParseReplyInPlace(client *c, ValkeyModuleCtx *ctx, CallReply *reply) {
+
+    sds proto;
+    size_t proto_len;
+    int owns_proto = 0;
+
+    if (listLength(c->reply) == 0 && (size_t)c->bufpos < c->buf_usable_size) {
+        /* This is a fast path for the common case of a reply inside the
+         * client static buffer. Don't create an SDS string but just use
+         * the client buffer directly. */
+        c->buf[c->bufpos] = '\0';
+        proto = c->buf;
+        proto_len = c->bufpos;
+    } else {
+        /* Convert the result of the command into a module reply. */
+        proto = sdsnewlen(c->buf, c->bufpos);
+        c->bufpos = 0;
+        while (listLength(c->reply)) {
+            clientReplyBlock *o = listNodeValue(listFirst(c->reply));
+            proto = sdscatlen(proto, o->buf, o->used);
+            listDelNode(c->reply, listFirst(c->reply));
+        }
+        proto_len = sdslen(proto);
+        owns_proto = 1;
+    }
+    callReplyInit(reply, proto, proto_len, c->deferred_reply_errors, ctx, owns_proto);
+    c->deferred_reply_errors = NULL; /* now the responsibility of the reply object. */
+}
+
 static CallReply *moduleParseReply(client *c, ValkeyModuleCtx *ctx) {
 
     sds proto;
@@ -6108,6 +6137,10 @@ void moduleParseCallReply_BulkString(ValkeyModuleCallReply *reply);
 void moduleParseCallReply_SimpleString(ValkeyModuleCallReply *reply);
 void moduleParseCallReply_Array(ValkeyModuleCallReply *reply);
 
+void VM_ResetCallReply(ValkeyModuleCallReply *reply) {
+    resetCallReply(reply);
+}
+
 
 /* Free a Call reply and all the nested replies it contains if it's an
  * array. */
@@ -6919,9 +6952,8 @@ cleanup:
     return reply;
 }
 
-ValkeyModuleCallReply *VM_CallArgv(ValkeyModuleCtx *ctx, robj **argv, int argc, int flags) {
+void VM_CallArgv(ValkeyModuleCtx *ctx, robj **argv, int argc, int flags, ValkeyModuleCallReply *reply) {
     client *c = NULL;
-    ValkeyModuleCallReply *reply = NULL;
     sds reply_error_msg = NULL;
     int replicate = 0;             /* Replicate this command? */
     int error_as_call_replies = 0; /* return errors as ValkeyModuleCallReply object */
@@ -7287,7 +7319,7 @@ ValkeyModuleCallReply *VM_CallArgv(ValkeyModuleCtx *ctx, robj **argv, int argc, 
         }
         c = NULL; /* Make sure not to free the client */
     } else {
-        reply = moduleParseReply(c, (ctx->flags & VALKEYMODULE_CTX_AUTO_MEMORY) ? ctx : NULL);
+        moduleParseReplyInPlace(c, (ctx->flags & VALKEYMODULE_CTX_AUTO_MEMORY) ? ctx : NULL, reply);
         if (flags & VALKEYMODULE_ARGV_CALL_REPLY_EXACT) {
             enableParseExactReplyTypeFlag(reply);
         }
@@ -7299,8 +7331,8 @@ cleanup:
         incrCommandStatsOnError(c->cmd, ERROR_COMMAND_REJECTED);
     }
     if (reply_error_msg != NULL) {
-        serverAssert(reply == NULL);
-        reply = callReplyCreateError(reply_error_msg, ctx);
+        //serverAssert(reply == NULL);
+        callReplyCreateErrorInPlace(reply, reply_error_msg, ctx);
     }
 
     if (reply) autoMemoryAdd(ctx, VALKEYMODULE_AM_REPLY, reply);
@@ -7327,6 +7359,10 @@ cleanup:
             moduleReleaseTempClient(c);
         }
     }
+}
+
+ValkeyModuleCallReply *VM_AllocCallReply(void) {
+    ValkeyModuleCallReply *reply = callReplyCreate(NULL, 0, NULL, NULL, 0);
     return reply;
 }
 
@@ -14956,7 +14992,9 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(StringToStreamID);
     REGISTER_API(Call);
     REGISTER_API(CallArgv);
+    REGISTER_API(AllocCallReply);
     REGISTER_API(CallReplyProto);
+    REGISTER_API(ResetCallReply);
     REGISTER_API(FreeCallReply);
     REGISTER_API(CallReplyInteger);
     REGISTER_API(CallReplyDouble);

@@ -1507,11 +1507,14 @@ VALKEYMODULE_API ValkeyModuleCallReply *(*ValkeyModule_Call)(ValkeyModuleCtx *ct
                                                              const char *cmdname,
                                                              const char *fmt,
                                                              ...)VALKEYMODULE_ATTR;
-VALKEYMODULE_API ValkeyModuleCallReply *(*ValkeyModule_CallArgv)(ValkeyModuleCtx *ctx,
-                                                                 ValkeyModuleString **argv,
-                                                                 int argc,
-                                                                 int flags)VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_CallArgv)(ValkeyModuleCtx *ctx,
+                                               ValkeyModuleString **argv,
+                                               int argc,
+                                               int flags,
+                                               ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleCallReply *(*ValkeyModule_AllocCallReply)(void)VALKEYMODULE_ATTR;
 VALKEYMODULE_API const char *(*ValkeyModule_CallReplyProto)(ValkeyModuleCallReply *reply, size_t *len)VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_ResetCallReply)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_FreeCallReply)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_CallReplyType)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
 VALKEYMODULE_API long long (*ValkeyModule_CallReplyInteger)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
@@ -1561,7 +1564,7 @@ VALKEYMODULE_API ValkeyModuleString *(
 VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_CreateStringPrintf)(ValkeyModuleCtx *ctx, const char *fmt, ...)
     VALKEYMODULE_ATTR_PRINTF(2, 3) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_FreeString)(ValkeyModuleCtx *ctx, ValkeyModuleString *str) VALKEYMODULE_ATTR;
-VALKEYMODULE_API const char *(*ValkeyModule_StringPtrLen)(const ValkeyModuleString *str, size_t *len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API const char *(*ValkeyModule_StringPtrLen)(const ValkeyModuleString *str, size_t *len)VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_StringIsSingleOwner)(const ValkeyModuleString *str) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_StringReplace)(ValkeyModuleString *str, const char *new_str, size_t new_len) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithError)(ValkeyModuleCtx *ctx, const char *err) VALKEYMODULE_ATTR;
@@ -2278,7 +2281,9 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(StringToStreamID);
     VALKEYMODULE_GET_API(Call);
     VALKEYMODULE_GET_API(CallArgv);
+    VALKEYMODULE_GET_API(AllocCallReply);
     VALKEYMODULE_GET_API(CallReplyProto);
+    VALKEYMODULE_GET_API(ResetCallReply);
     VALKEYMODULE_GET_API(FreeCallReply);
     VALKEYMODULE_GET_API(CallReplyInteger);
     VALKEYMODULE_GET_API(CallReplyDouble);
