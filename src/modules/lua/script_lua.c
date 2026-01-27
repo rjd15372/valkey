@@ -934,8 +934,7 @@ static ValkeyModuleString *getCallArgvCacheItem(int index, const char *str, size
 
 static void returnCallArgvCacheItem(int index, ValkeyModuleString *item) {
     if (index < LUA_CMD_OBJCACHE_SIZE && ValkeyModule_StringIsSingleOwner(item)) {
-        size_t len = 0;
-        ValkeyModule_StringPtrLen(item, &len);
+        size_t len = ValkeyModule_StringLength(item);
         if (len <= LUA_CMD_OBJCACHE_MAX_LEN) {
             if (argv_cache.cache[index] != NULL) {
                 ValkeyModule_FreeString(NULL, argv_cache.cache[index]);

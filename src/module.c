@@ -3031,8 +3031,13 @@ const char *VM_StringPtrLen(const ValkeyModuleString *str, size_t *len) {
         if (len) *len = strlen(errmsg);
         return errmsg;
     }
-    if (len) *len = sdslen(objectGetVal(str));
-    return objectGetVal(str);
+    void *val = objectGetVal(str);
+    if (len) *len = sdslen(val);
+    return val;
+}
+
+size_t VM_StringLength(const ValkeyModuleString *str) {
+    return sdslen(objectGetVal(str));
 }
 
 int VM_StringIsSingleOwner(const ValkeyModuleString *str) {
@@ -15029,6 +15034,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(CreateStringPrintf);
     REGISTER_API(FreeString);
     REGISTER_API(StringPtrLen);
+    REGISTER_API(StringLength);
     REGISTER_API(StringIsSingleOwner);
     REGISTER_API(StringReplace);
     REGISTER_API(AutoMemory);
