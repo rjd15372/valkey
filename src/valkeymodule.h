@@ -1341,6 +1341,7 @@ typedef struct ValkeyModuleScriptingEngineMethodsV4 {
 /* Incomplete structures for compiler checks but opaque access. */
 typedef struct ValkeyModuleCommand ValkeyModuleCommand;
 typedef struct ValkeyModuleCallReply ValkeyModuleCallReply;
+typedef void ValkeyModuleCallRawReply;
 typedef struct ValkeyModuleType ValkeyModuleType;
 typedef struct ValkeyModuleBlockedClient ValkeyModuleBlockedClient;
 typedef struct ValkeyModuleClusterInfo ValkeyModuleClusterInfo;
@@ -1507,14 +1508,15 @@ VALKEYMODULE_API ValkeyModuleCallReply *(*ValkeyModule_Call)(ValkeyModuleCtx *ct
                                                              const char *cmdname,
                                                              const char *fmt,
                                                              ...)VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*ValkeyModule_CallArgv)(ValkeyModuleCtx *ctx,
-                                               ValkeyModuleString **argv,
-                                               int argc,
-                                               int flags,
-                                               ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
-VALKEYMODULE_API ValkeyModuleCallReply *(*ValkeyModule_AllocCallReply)(void)VALKEYMODULE_ATTR;
-VALKEYMODULE_API const char *(*ValkeyModule_CallReplyProto)(ValkeyModuleCallReply *reply, size_t *len)VALKEYMODULE_ATTR;
-VALKEYMODULE_API void (*ValkeyModule_ResetCallReply)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleCallRawReply *(*ValkeyModule_CallArgv)(ValkeyModuleCtx *ctx,
+                                                                    ValkeyModuleString **argv,
+                                                                    int argc,
+                                                                    int flags,
+                                                                    ValkeyModuleString **error)VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleCallReply *(*ValkeyModule_CallReplyFromCallRawReply)(ValkeyModuleCtx *ctx,
+                                                                                  ValkeyModuleCallRawReply *raw_reply)VALKEYMODULE_ATTR;
+VALKEYMODULE_API char *(*ValkeyModule_CallRawReplyBuffer)(ValkeyModuleCallRawReply *raw_reply, int *is_owner)VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_CallRawReplyRelease)(ValkeyModuleCallRawReply *raw_reply) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_FreeCallReply)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_CallReplyType)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
 VALKEYMODULE_API long long (*ValkeyModule_CallReplyInteger)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
@@ -2281,9 +2283,9 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(StringToStreamID);
     VALKEYMODULE_GET_API(Call);
     VALKEYMODULE_GET_API(CallArgv);
-    VALKEYMODULE_GET_API(AllocCallReply);
-    VALKEYMODULE_GET_API(CallReplyProto);
-    VALKEYMODULE_GET_API(ResetCallReply);
+    VALKEYMODULE_GET_API(CallReplyFromCallRawReply);
+    VALKEYMODULE_GET_API(CallRawReplyBuffer);
+    VALKEYMODULE_GET_API(CallRawReplyRelease);
     VALKEYMODULE_GET_API(FreeCallReply);
     VALKEYMODULE_GET_API(CallReplyInteger);
     VALKEYMODULE_GET_API(CallReplyDouble);

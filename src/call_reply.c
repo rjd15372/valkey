@@ -576,17 +576,6 @@ CallReply *callReplyCreate(sds reply, size_t reply_len, list *deferred_error_lis
     return res;
 }
 
-void callReplyInit(CallReply *call_reply, sds reply, size_t reply_len, list *deferred_error_list, void *private_data, int owns_proto) {
-    call_reply->flags = REPLY_FLAG_ROOT;
-    call_reply->original_proto = reply;
-    call_reply->owns_proto = owns_proto;
-    call_reply->proto = reply;
-    call_reply->proto_len = reply_len;
-    call_reply->private_data = private_data;
-    call_reply->attribute = NULL;
-    call_reply->deferred_error_list = deferred_error_list;
-}
-
 /* Create a new CallReply struct from the reply blob representing an error message.
  * Automatically creating deferred_error_list and set a copy of the reply in it.
  * Refer to callReplyCreate for detailed explanation.
@@ -603,18 +592,6 @@ CallReply *callReplyCreateError(sds reply, void *private_data) {
     listSetFreeMethod(deferred_error_list, sdsfreeVoid);
     listAddNodeTail(deferred_error_list, sdsnew(err_buff));
     return callReplyCreate(err_buff, sdslen(err_buff), deferred_error_list, private_data, 1);
-}
-
-void callReplyCreateErrorInPlace(CallReply *call_reply, sds reply, void *private_data) {
-    sds err_buff = reply;
-    if (err_buff[0] != '-') {
-        err_buff = sdscatfmt(sdsempty(), "-ERR %S\r\n", reply);
-        sdsfree(reply);
-    }
-    list *deferred_error_list = listCreate();
-    listSetFreeMethod(deferred_error_list, sdsfreeVoid);
-    listAddNodeTail(deferred_error_list, sdsnew(err_buff));
-    callReplyInit(call_reply,err_buff, sdslen(err_buff), deferred_error_list, private_data, 1);
 }
 
 /* Enable exact reply type parsing to preserve type distinctions.
