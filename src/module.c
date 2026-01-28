@@ -324,6 +324,9 @@ static size_t moduleTempClientCount = 0;    /* Client count in pool */
 static size_t moduleTempClientMinCount = 0; /* Min client count in pool since
                                                the last cron. */
 
+static client *scriptingEngineClient = NULL; /* Client used by the scripting engine
+                                                for module commands execution. */
+
 /* We need a mutex that is unlocked / relocked in beforeSleep() in order to
  * allow thread safe contexts to execute commands at a safe moment. */
 static pthread_mutex_t moduleGIL = PTHREAD_MUTEX_INITIALIZER;
@@ -703,6 +706,34 @@ client *moduleAllocTempClient(void) {
         c->user = NULL; /* Root user */
     }
     return c;
+}
+
+static client *getScriptingEngineClient(void) {
+    if (scriptingEngineClient == NULL) {
+        scriptingEngineClient = createClient(NULL);
+        scriptingEngineClient->flag.module = 1;
+        scriptingEngineClient->flag.fake = 1;
+        scriptingEngineClient->user = NULL; /* Root user */
+    }
+    return scriptingEngineClient;
+}
+
+static void releaseScriptingEngineClient(void) {
+    serverAssert(scriptingEngineClient != NULL);
+    listEmpty(scriptingEngineClient->reply);
+    scriptingEngineClient->reply_bytes = 0;
+    scriptingEngineClient->duration = 0;
+
+    resetClient(scriptingEngineClient);
+    scriptingEngineClient->argc = scriptingEngineClient->argv_len = 0;
+    scriptingEngineClient->argv = NULL;
+
+    scriptingEngineClient->bufpos = 0;
+    scriptingEngineClient->raw_flag = 0;
+    scriptingEngineClient->flag.module = 1;
+    scriptingEngineClient->flag.fake = 1;
+    scriptingEngineClient->user = NULL; /* Root user */
+    scriptingEngineClient->cmd = scriptingEngineClient->lastcmd = scriptingEngineClient->realcmd = scriptingEngineClient->parsed_cmd = NULL;
 }
 
 static void freeValkeyModuleAsyncRMCallPromise(ValkeyModuleAsyncRMCallPromise *promise) {
@@ -6398,7 +6429,7 @@ client *callCommandHelper(ValkeyModuleCtx *ctx, robj **argv, int argc, int flags
      * execution runtime must exist.. */
     serverAssert(!is_running_script || scriptIsRunning());
 
-    c = moduleAllocTempClient();
+    c = is_running_script ? getScriptingEngineClient() : moduleAllocTempClient();
 
     if (!(flags & VALKEYMODULE_CALL_ARGV_FLAG_ALLOW_BLOCK)) {
         /* We do not want to allow block, the module do not expect it */
@@ -6911,7 +6942,11 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     }
 
     if (c) {
-        moduleReleaseTempClient(c);
+        if (c == scriptingEngineClient) {
+            releaseScriptingEngineClient();
+        } else {
+            moduleReleaseTempClient(c);
+        }
     }
 
     return reply;
@@ -7011,7 +7046,11 @@ ValkeyModuleCallReply *VM_CallRawReplyToCallReply(ValkeyModuleCtx *ctx, ValkeyMo
     if (reply) autoMemoryAdd(ctx, VALKEYMODULE_AM_REPLY, reply);
 
     if (c) {
+        if (c == scriptingEngineClient) {
+            releaseScriptingEngineClient();
+        } else {
             moduleReleaseTempClient(c);
+        }
     }
 
     return reply;
@@ -7081,7 +7120,11 @@ char *VM_CallRawReplyBuffer(ValkeyModuleCallRawReply *raw_reply, int *is_owner) 
 void VM_CallRawReplyRelease(ValkeyModuleCallRawReply *raw_reply) {
     client *c = (client *)raw_reply;
     serverAssert(!c->flag.blocked);
+    if (c == scriptingEngineClient) {
+        releaseScriptingEngineClient();
+    } else {
         moduleReleaseTempClient(c);
+    }
 }
 
 /* Return a pointer, and a length, to the protocol returned by the command
