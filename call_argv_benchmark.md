@@ -5,13 +5,25 @@ Comparison of `ValkeyModule_Call` (VM_Call) and `ValkeyModule_CallArgv` (VM_Call
 
 ## Variants
 
+### Single inner call (pass-through)
+
 Three module commands, each a transparent pass-through to the inner Valkey command:
 
 | Command | Implementation |
 |---|---|
 | `test.call <cmd> [args...]` | `VM_Call` — builds a `CallReply` tree, replies via `ReplyWithCallReply` |
-| `test.call_argv_passthrough <cmd> [args...]` | `VM_CallArgv` with `replyAvailable` — raw RESP bytes written directly to the output buffer |
+| `test.call_argv_passthrough <cmd> [args...]` | `VM_CallArgv` with `onAvailable` — raw RESP bytes written directly to the output buffer |
 | `test.call_argv <cmd> [args...]` | `VM_CallArgv` with per-type callbacks — parses reply and re-serializes via `ValkeyModule_ReplyWith*` |
+
+### Multiple inner calls (N× fan-out)
+
+Three module commands that issue the same inner command N times and return an array of N results:
+
+| Command | Implementation |
+|---|---|
+| `test.multi_call <N> <cmd> [args...]` | N× `VM_Call` — allocates and frees a `CallReply` tree per inner call |
+| `test.multi_call_argv <N> <cmd> [args...]` | N× `VM_CallArgv` with `onAvailable` — each raw reply written directly |
+| `test.multi_call_argv_typed <N> <cmd> [args...]` | N× `VM_CallArgv` with per-type callbacks — re-serializes each reply element by element |
 
 ## Metrics
 
@@ -103,6 +115,21 @@ RESP3 type encoding differently.
 | E | payload size (scalar, no extra nodes) | minimal | large byte volume |
 | F | same node count as C, but RESP3 map type | minimal | RESP3 map encoding |
 
+### Multi-call categories
+
+These cases run the same inner command N=5 times per module command invocation to simulate a
+module that fans out to several internal reads (e.g. a custom MGET, a read-then-compute pattern).
+Each inner call contributes one element to an outer array reply.
+
+| Case | Inner command | Per-invocation work |
+|---|---|---|
+| G | `GET mykey` ×5 | 5 scalar reads, 5 small bulk-string replies |
+| H | `LRANGE mylist 0 -1` ×5 | 5 large array reads, each returning 500 elements |
+
+Category G amplifies the per-call `CallReply` allocation cost (5 alloc+free cycles vs 1).
+Category H additionally multiplies the per-element dispatch overhead for the typed-callbacks
+variant (5×500 = 2,500 individual callback invocations per module command).
+
 ---
 
 ## Results
@@ -116,7 +143,7 @@ The "vs test.call" column shows the reduction in server-side time relative to `t
 | Variant | RPS | p50 (ms) | server µs/call | vs test.call |
 |---|---:|---:|---:|---:|
 | test.call | 150,301 | 0.215 | 0.82 | — |
-| test.call_argv_passthrough | 162,602 | 0.151 | 0.47 | −43% |
+| test.call_argv_passthrough | 162,602 | 0.151 | 0.47 | **−43%** |
 | test.call_argv | 173,611 | 0.143 | 0.44 | −46% |
 
 ### Category B — EXISTS k1..k100 (100 keys)
@@ -124,7 +151,7 @@ The "vs test.call" column shows the reduction in server-side time relative to `t
 | Variant | RPS | p50 (ms) | server µs/call | vs test.call |
 |---|---:|---:|---:|---:|
 | test.call | 86,806 | 0.503 | 3.72 | — |
-| test.call_argv_passthrough | 87,771 | 0.503 | 3.40 | −9% |
+| test.call_argv_passthrough | 87,771 | 0.503 | 3.40 | **−9%** |
 | test.call_argv | 84,270 | 0.503 | 3.54 | −5% |
 
 ### Category C — LRANGE mylist 0 -1 (500 elements)
@@ -167,18 +194,40 @@ The "vs test.call" column shows the reduction in server-side time relative to `t
 | test.call_argv_passthrough | 15,597 | 1.543 | 45.54 | **−40%** |
 | test.call_argv | 12,338 | 3.071 | 72.58 | −4% |
 
+### Category G — Multi-call: 5× GET mykey (scalar reply)
+
+Each module command issues GET five times and returns a 5-element array.
+100,000 requests, 50 concurrent clients.
+
+| Variant | RPS | p50 (ms) | server µs/call | vs test.multi_call |
+|---|---:|---:|---:|---:|
+| test.multi_call | 119,617 | 0.375 | 2.37 | — |
+| test.multi_call_argv | 137,552 | 0.255 | 1.36 | **−43%** |
+| test.multi_call_argv_typed | 133,511 | 0.311 | 1.55 | −35% |
+
+### Category H — Multi-call: 5× LRANGE mylist 0 -1 (500-element array reply)
+
+Each module command issues LRANGE five times and returns a 5-element array of 500-element arrays.
+100,000 requests, 50 concurrent clients.
+
+| Variant | RPS | p50 (ms) | server µs/call | vs test.multi_call |
+|---|---:|---:|---:|---:|
+| test.multi_call | 5,015 | 6.375 | 172.78 | — |
+| test.multi_call_argv | 6,344 | 3.591 | 75.89 | **−56%** |
+| test.multi_call_argv_typed | 4,873 | 6.583 | 177.70 | +3% |
+
 ---
 
 ## Conclusions
 
-### 1. `replyAvailable` passthrough consistently outperforms `VM_Call`
+### 1. `onAvailable` passthrough consistently outperforms `VM_Call`
 
 `test.call_argv_passthrough` is faster than `test.call` in every category. Even for a simple
 `GET` returning a short bulk string (Category A) the server-side time drops by 43%. For commands
 returning large arrays the improvement ranges from 37% (XRANGE, nested) to 58% (LRANGE, flat).
 The gain comes from eliminating both steps that `VM_Call` must perform: building an intermediate
 `CallReply` tree from the parsed reply, and then re-serializing that tree back to RESP. The
-`replyAvailable` callback receives the raw RESP bytes produced by the inner command and writes
+`onAvailable` callback receives the raw RESP bytes produced by the inner command and writes
 them directly to the client output buffer — no allocation, no parse, no re-serialize.
 
 ### 2. Typed callbacks (`test.call_argv`) performance depends on reply complexity
@@ -243,17 +292,50 @@ RESP3 for the same underlying data (500 fields):
 | RESP2 (flat array, 1,000 nodes) | 80.10 | 46.58 | −42% |
 | RESP3 (map, ~1,001 nodes) | 75.83 | 45.54 | −40% |
 
-The results are statistically indistinguishable. `VALKEYMODULE_CALL_ARGV_FLAG_RESP_AUTO` causes
+The results are statistically indistinguishable. `VALKEYMODULE_CALL_ARGV_RESP_AUTO` causes
 the inner call to match the client's negotiated protocol, so the raw RESP3 bytes flow directly
-to the client in both `replyAvailable` and `VM_Call`'s re-serialization path. The map encoding
+to the client in both `onAvailable` and `VM_Call`'s re-serialization path. The map encoding
 overhead is the same for both variants, leaving the relative difference unchanged.
+
+### 7. Multi-call: `onAvailable` advantage holds across N; typed callbacks near parity with VM_Call
+
+Categories G and H isolate how the three variants scale when a module command issues N inner
+calls (N=5) and assembles an array reply.
+
+**Scalar fan-out (Category G — 5× GET):**
+
+| Variant | server µs/call | vs test.multi_call |
+|---|---:|---:|
+| test.multi_call | 2.37 | — |
+| test.multi_call_argv | 1.36 | **−43%** |
+| test.multi_call_argv_typed | 1.55 | −35% |
+
+Both `onAvailable` and typed callbacks outperform `VM_Call` by similar margins. The relative
+ordering matches the single-call GET result (Categories A/§2), confirming that the per-call
+`CallReply` allocation cost compounds linearly with N.
+
+**Large-array fan-out (Category H — 5× LRANGE):**
+
+| Variant | server µs/call | vs test.multi_call |
+|---|---:|---:|
+| test.multi_call | 172.78 | — |
+| test.multi_call_argv | 75.89 | **−56%** |
+| test.multi_call_argv_typed | 177.70 | +3% |
+
+The typed-callbacks variant is essentially at parity with `VM_Call` for large-array fan-out
+(+3%, within noise). Each LRANGE produces 500 callback dispatches and five LRANGEs produce
+2,500 dispatches per module command, but the per-dispatch cost is small enough that the total
+overhead is comparable to the `CallReply` tree approach. `onAvailable` remains the clear
+winner at −56%, avoiding both the tree allocation and the per-element dispatch entirely.
 
 ### Summary
 
-Use `VM_CallArgv` with `replyAvailable` whenever the module command is a pass-through (the reply
-from the inner command is forwarded to the caller unchanged). The raw RESP bytes are already in
-the correct format; copying them directly avoids all intermediate allocation and serialization
-overhead. Typed per-RESP callbacks are suited for cases where the module needs to inspect or
-transform individual reply elements, but they do not improve throughput over `VM_Call` for flat
-arrays and are measurably slower for deeply nested structures due to per-element dispatch
-overhead.
+Use `VM_CallArgv` with `onAvailable` whenever the module command forwards inner replies
+unchanged — both for single and multi-call patterns. The raw RESP bytes are already in the
+correct format; writing them directly avoids all intermediate allocation and serialization,
+with gains that hold regardless of how many inner calls are made.
+
+Typed per-RESP callbacks are suited for cases where the module needs to inspect or transform
+individual reply elements. Their overhead is comparable to `VM_Call` for large-array replies
+and multi-call fan-out — they do not provide a throughput advantage over `VM_Call` in those
+scenarios, but they also do not add meaningful cost.

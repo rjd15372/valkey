@@ -159,6 +159,9 @@ def run_bench(cmd_args, extra_flags=None):
 
 VARIANTS = ["test.call", "test.call_argv_passthrough", "test.call_argv"]
 
+MULTI_N = 5
+MULTI_VARIANTS = ["test.multi_call", "test.multi_call_argv", "test.multi_call_argv_typed"]
+
 # Build inner args for category B (EXISTS 100 keys)
 exists_100 = ["exists"] + [f"k{i}" for i in range(1, 101)]
 
@@ -201,6 +204,21 @@ CASES = [
     ),
 ]
 
+# Multi-call cases: each inner_cmd is joined with str(MULTI_N) when building
+# the benchmark command, i.e.  <variant> <MULTI_N> <inner_cmd...>
+MULTI_CASES = [
+    (
+        f"Multi-call ({MULTI_N}× GET mykey, scalar reply)",
+        ["get", "mykey"],
+        [],
+    ),
+    (
+        f"Multi-call ({MULTI_N}× LRANGE mylist 0 -1, 500-element array reply)",
+        ["lrange", "mylist", "0", "-1"],
+        [],
+    ),
+]
+
 
 # ---------------------------------------------------------------------------
 # Main
@@ -229,6 +247,22 @@ def main():
                     p50_s  = f"p50={p50} ms"       if p50  else "p50=? ms"
                     usec_s = f"server={usec} µs"    if usec else "server=? µs"
                     print(f"  {rps_s}  {p50_s:<14}  {usec_s}")
+            all_results[title] = rows
+
+        for title, inner_cmd, extra_flags in MULTI_CASES:
+            print(f"\n{title}")
+            rows = []
+            for variant in MULTI_VARIANTS:
+                cmd_args = [variant, str(MULTI_N)] + inner_cmd
+                label = f"{variant} {MULTI_N} {' '.join(inner_cmd[:2])}"
+                print(f"  {label:<55}", end="", flush=True)
+                rps, p50 = run_bench(cmd_args, extra_flags)
+                usec = get_usec(variant)
+                rows.append((variant, rps, p50, usec))
+                rps_s  = f"{rps:>10.0f} rps" if rps  else "         ? rps"
+                p50_s  = f"p50={p50} ms"       if p50  else "p50=? ms"
+                usec_s = f"server={usec} µs"    if usec else "server=? µs"
+                print(f"  {rps_s}  {p50_s:<14}  {usec_s}")
             all_results[title] = rows
 
     finally:
